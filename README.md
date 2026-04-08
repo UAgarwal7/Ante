@@ -47,12 +47,6 @@ I was spending too much time each morning context-switching between Gmail, Googl
 
 ---
 
-## Docs
-
-- [Product spec](docs/product_summary.md) — full breakdown of what Ante does and why
-
----
-
 ## Setup
 
 Setup guide coming once the project is stable. Built for personal use — currently configured for my own Google account and Discord server.
@@ -62,3 +56,5 @@ Setup guide coming once the project is stable. Built for personal use — curren
 ## Notes
 
 This is a personal project and a learning exercise. API keys and OAuth tokens are not committed to this repo. See `.gitignore`.
+
+Project spec can be found under docs -> product-summary.md
