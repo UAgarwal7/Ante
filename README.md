@@ -1,4 +1,4 @@
-# Ante 🦞
+# Ante
 
 A personal AI daily briefing agent built on [OpenClaw](https://openclaw.ai). Ante runs on my own machine, connects to my Google Workspace and curated news sources, and delivers a concise morning briefing and evening check-in to Discord every day — then stays available for on-demand tasks throughout the day.
 
@@ -37,7 +37,7 @@ I was spending too much time each morning context-switching between Gmail, Googl
 
 ## Project status
 
-🚧 **In active development** — built over one week as a first OpenClaw project.
+**In active development** — built over one week as a first OpenClaw project.
 
 - [x] Phase 1 — OpenClaw installed and connected to Discord
 - [ ] Phase 2 — Google Calendar integration
