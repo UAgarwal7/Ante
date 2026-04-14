@@ -1,3 +1,9 @@
 *.env
 config/secrets.yaml
 ~/.openclaw/plugins/*/tokens
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
