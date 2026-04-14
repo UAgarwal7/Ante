@@ -43,14 +43,14 @@ def get_events(days=1):
         events = events_result.get('items', [])
         for event in events:
             all_events.append({
+                'id': event['id'],
                 'calendar': calendar['summary'],
                 'title': event.get('summary', 'No title'),
                 'start': event['start'].get('dateTime', event['start'].get('date')),
                 'end': event['end'].get('dateTime', event['end'].get('date')),
                 'location': event.get('location', ''),
                 'description': event.get('description', '')
-            })
-    
+            })    
     all_events.sort(key=lambda x: x['start'])
     return all_events
 
@@ -71,6 +71,11 @@ def create_event(title, start_time, end_time, description='', location=''):
     }
     event = service.events().insert(calendarId='primary', body=event).execute()
     return event.get('htmlLink')
+
+def delete_event(event_id, calendar_id='primary'):
+    service = get_calendar_service()
+    service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+    return f"Event {event_id} deleted."
 
 if __name__ == '__main__':
     # Test reading
