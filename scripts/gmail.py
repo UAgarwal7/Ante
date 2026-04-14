@@ -14,7 +14,7 @@ CREDENTIALS_FILE = os.path.expanduser('~/.openclaw/google_credentials.json')
 TOKEN_FILE = os.path.expanduser('~/.openclaw/google_token.json')
 
 IMPORTANT_SENDERS = ['umich.edu', 'canvas', 'gradescope']
-IMPORTANT_KEYWORDS = ['deadline', 'interview', 'offer', 'urgent', 'action required', 'application']
+IMPORTANT_KEYWORDS = ['deadline', 'interview', 'offer', 'urgent', 'action required', 'application', 'midterm', 'exam']
 
 def get_gmail_service():
     creds = None
