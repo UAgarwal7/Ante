@@ -5,6 +5,19 @@
 **Version:** 0.3
 **Last Updated:** April 2026
 
+> **This is the original product spec, kept as written. It describes the target, not the current
+> build.** Most of what follows is not implemented yet — there is no scheduling (the 10:30 AM and
+> 10:30 PM runs do not happen), no Tasks integration, and no news digest. Two things have also been
+> decided differently since:
+>
+> - **Gmail is now read-only**, so the email drafting, archiving, and labeling under the Gmail pillar
+>   are not built and are not planned.
+> - **"No calendar deletions — edits only"** is the policy, but a `delete_event` function still exists
+>   in `scripts/gcalendar.py` and is being removed. The scope permits deletion; only the code
+>   restricts it.
+>
+> See the README and [STATUS.md](../STATUS.md) for what actually works today.
+
 ---
 
 ## Overview

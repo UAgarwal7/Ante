@@ -7,17 +7,20 @@ Use this skill whenever the user asks about their calendar, events, schedule, or
 To get the user's calendar events, run this command:
 
 ```bash
-cd /Users/utsavagarwal/Ante && source venv/bin/activate && python3 scripts/gcalendar.py
+cd "$ANTE_HOME" && source venv/bin/activate && python3 scripts/gcalendar.py
 ```
 
-This returns a JSON list of today's events. Parse the output and summarize it naturally for the user.
+This returns a JSON list of events across all the user's calendars, covering a **rolling window from
+now to 24 hours from now** — not the calendar day. Late in the evening this means tomorrow morning's
+events, so don't describe the result as "today" without checking the timestamps. Parse the output and
+summarize it naturally for the user.
 
 ## Creating events
 
 To create an event, run:
 
 ```bash
-cd /Users/utsavagarwal/Ante && source venv/bin/activate && python3 -c "
+cd "$ANTE_HOME" && source venv/bin/activate && python3 -c "
 from scripts.gcalendar import create_event
 result = create_event('[TITLE]', '[START]', '[END]', '[DESCRIPTION]')
 print(result)

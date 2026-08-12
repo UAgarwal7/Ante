@@ -4,4 +4,4 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-exec "$ROOT/venv/bin/python3" "scripts/gmail.py" "$@"
+exec "$ROOT/venv/bin/python3" "scripts/auth_check.py" "$@"

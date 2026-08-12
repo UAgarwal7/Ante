@@ -1,9 +1,24 @@
+# Secrets and credentials
+# Nothing under ~/.openclaw/ is inside this repo, so it cannot be committed by
+# accident. These patterns guard against a copy being dropped into the checkout.
 *.env
+.env
 config/secrets.yaml
-~/.openclaw/plugins/*/tokens
+*credentials*.json
+*token*.json
+*.pem
+*.key
+client_secret*.json
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
 venv/
+.venv/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
