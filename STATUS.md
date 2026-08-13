@@ -12,11 +12,20 @@ Current engineering state. [docs/product-summary.md](docs/product-summary.md) is
 
 ## TL;DR
 
-Google auth is **fixed and verified** — all three APIs respond. Scope policy is decided and
-centralized. Nothing else has been touched yet: `gcalendar.py` and `gmail.py` are still on their
-original per-file auth and still contain write functions that need removing.
+Google auth is **fixed and verified**, and the **script cutover is done** (2026-08-12). Both
+`gcalendar.py` and `gmail.py` now go through `ante_auth`, the browser-consent footgun is gone, write
+functions that contradicted the scope policy are removed, the keyword filter is inverted from a gate
+to a floor, and skills have one source of truth. Calendar and Gmail both run clean and return real
+data.
 
-**Next action:** the script cutover (see "Next steps" below). Everything else waits on it.
+`scripts/tasks.py` is now built and verified too — **all three pillars run clean and return real
+data**, each with a `report` and a non-zero exit on partial failure.
+
+The two write functions the spec promised but never had — `update_event` (reschedule) and
+`update_task` (change a due date) — are now built and verified. **Google functionality is complete**
+as scoped.
+
+**Next action:** the briefing assembler, then OpenClaw wiring.
 
 ---
 
@@ -26,16 +35,16 @@ original per-file auth and still contain write functions that need removing.
 |---|---|
 | Config | `~/.openclaw/openclaw.json`. **`config/config.yaml` in this repo is empty (0 bytes)** and unused. |
 | Brain / system prompt | `~/.openclaw/workspace/` — `BOOTSTRAP.md`, `SOUL.md`, `AGENTS.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`. **There is no `system.md`.** |
-| Skills the agent loads | `~/.openclaw/workspace/skills/{gcalendar,gmail}/SKILL.md` — **untracked by this repo** |
-| Skills in this repo | `skills/gcalendar.md` has content but is **dead** (nothing reads it). `skills/morning-briefing.md`, `skills/evening-checkin.md`, `skills/news-fetch.md` are all **0 bytes**. |
+| Skills the agent loads | `~/.openclaw/workspace/skills/{gcalendar,gmail,tasks}` are now **symlinks into this repo** (`skills/gcalendar/`, `skills/gmail/`, `skills/tasks/`). Editing the tracked file changes agent behavior directly; they can no longer diverge. Pre-cutover copies backed up at `~/.openclaw/workspace/skills.backup-2026-08-12`. |
+| Skills in this repo | `skills/gcalendar/SKILL.md`, `skills/gmail/SKILL.md` and `skills/tasks/SKILL.md` are live. `skills/morning-briefing.md`, `skills/evening-checkin.md`, `skills/news-fetch.md` are TODO placeholders (they were 0 bytes, which read as "done"). |
 | Model | Claude Haiku 4.5 (`anthropic/claude-haiku-4-5-20251001`) |
 | Delivery | Discord (app + channel IDs in local config, not here) |
 | Google Cloud | Desktop OAuth client (project ID in local config, not here) |
 | Google account | Personal Gmail — **not** the university account |
 
-⚠️ **Two sources of truth for skills.** The repo copy and the workspace copy have already diverged
-(the workspace calendar skill has a "Deleting events" section the repo copy lacks). Collapse these
-into one during the cutover — generate or symlink the workspace skills from the repo.
+✅ **Skill divergence is resolved.** Before the cutover the workspace copy documented `delete_event`,
+`archive_email` and `label_email` — all of which are now gone from the code. The symlink means that
+class of drift can't recur.
 
 ---
 
@@ -78,7 +87,7 @@ LLM with shell access. Read-only, the worst case of a malicious email is a bad s
 |---|---|
 | No email send / draft / archive / label | **Google** — the token cannot do it |
 | No calendar deletion | **Our code** — `calendar.events` permits `events.delete`; only removing `delete_event` stops it |
-| No task deletion | **Our code** — `tasks` permits it; `tasks.py` just won't expose it |
+| No task deletion | **Our code** — `tasks` permits it; `tasks.py` has no delete function ✅ |
 
 The two code-level ones are exactly what the cutover has to deliver.
 
@@ -103,6 +112,34 @@ Rejected alternatives: Apps Script → shared Sheet (zero footprint but **irreve
 image-only email becomes sender + subject + nothing, and a Drive-OCR bolt-on makes it more complex
 than forwarding while still lossy); POP fetch (same storage as forwarding, solves nothing); dedicated
 sink account (extra account + token to maintain).
+
+#### Strict maybe: AgentMail as the forwarding sink
+
+**Not decided. Revisit when step 5 (forwarding) actually happens — do not adopt before then.**
+
+[AgentMail](https://www.agentmail.to/) is an API-first email provider that **provisions new
+agent-owned inboxes**. It cannot connect to an existing Gmail account, so it is **not** a replacement
+for the Gmail read path — that stays Google OAuth + `gmail.readonly` regardless.
+
+What it *would* replace is the forwarding sink above. Forward university mail into an AgentMail inbox
+instead of into personal Gmail, and the original objection (inbox mess + storage) goes to literally
+zero: no filter, no `UMich` label, no Skip-Inbox rule, no 40 MB/year. It also ships an MCP server, so
+it could attach to OpenClaw as a tool instead of another Python script to maintain.
+
+Cost is not the blocker: free tier is 3 inboxes / 3,000 emails per month / 100 per day, no card.
+Filtered university mail is well inside that. Realistic spend is **$0**; paid starts at $20/mo.
+
+Why it stays a maybe:
+- **Dependency risk.** It's a Series-A startup (~$6M, Mar 2026). A Gmail label is durable in a way
+  someone's free tier is not. If it folds or repositions, the forwarding target evaporates.
+- **It reopens the send question.** An agent-owned address defuses the *identity* half of the
+  read-only Gmail decision — mail leaves as `ante@…`, not under your name. It does **not** defuse
+  prompt injection: Ante would read attacker-controllable mail and hold a send button. Smaller blast
+  radius, not zero. If adopted, keep send disabled by default.
+- **Wrong time.** It solves none of the current blockers (cutover, Tasks, assembler, cron, gateway).
+  Adding a third-party dependency before the thing assembles one briefing is backwards.
+
+Decide it head-to-head against "Gmail filter + label" at step 5, not before.
 
 ### Keyword filter becomes a hint, not a gate
 
@@ -152,56 +189,83 @@ says so explicitly.
 
 ---
 
-## Live data as of 2026-08-12
+## Live data as of 2026-08-12 (post-cutover)
 
 | Pillar | State |
 |---|---|
-| Calendar | **0 events** next 24h (4 calendars; university calendar shared in with `writer` access ✅) |
-| Tasks | **0 open** in the default list (1 task list) |
-| Gmail | 2 flagged /24h, 8 /7d, out of ~100 messages/7d |
+| Calendar | ✅ **Proven working.** 4 calendars found, 4 queried, 0 failures. 0 events in the next 24h but **1 event within 7 days** — on the shared university calendar, which confirms the share works end to end. 1 cross-calendar duplicate collapsed. |
+| Gmail | ✅ **Proven working.** 16 messages scanned in 24h, 0 failures, not truncated. 1 matched `always_surface`. |
+| Tasks | ✅ **Proven working.** 1 list found, 1 queried, 0 failures. Read, add, complete, reopen, overdue detection and due-date validation all exercised against live data. |
 
-⚠️ **Two of three pillars have no data to prove themselves with.** August, summer break — plausibly
-correct, not evidence of breakage. But with zero rows you **cannot distinguish "working" from
-"silently broken."** For the first real test run: widen Calendar to 7 days, list all task lists, and
-add one throwaway task. If all three appear, assembly is genuinely proven.
+**Every pillar now has a non-empty fixture, which is what makes these greens meaningful.** Calendar
+was widened to 7 days (at 24h it returned `[]`, which proved nothing); Tasks got a real task plus two
+throwaway canaries. Nothing here is a pass-on-empty result any more.
+
+The Tasks write path was verified end to end: add with a due date → complete → reopen → complete, plus
+an overdue canary dated 11 days ago to confirm `overdue` computes correctly and clears on completion,
+plus a rejected `due='next tuesday'` to confirm date validation. **Two completed canary tasks are
+left in `My Tasks`** — Ante deliberately cannot delete them; remove them in the Google Tasks UI if
+they bother you.
+
+Note the Gmail numbers: **16 messages scanned, 1 flagged.** Under the old gate, the briefing would
+have seen exactly 1 message and the other 15 would never have reached the model. That is the change
+in concrete terms.
 
 Other measurements worth not re-deriving:
-- **40% of mail (16/40 sampled) is HTML-only with no usable `text/plain`.** `get_email_body()` only
-  reads `text/plain` and only scans top-level parts, so it returns `''` for all of them. Not
-  currently biting because `get_flagged_emails()` uses `format='metadata'` + Gmail's server-side
-  `snippet`, which works fine for HTML mail. It fails totally for image-only email (snippet is blank
-  too) — that's where a vision path would come in, since Haiku 4.5 is multimodal.
+- **Body extraction now succeeds on 40/40 sampled messages (0% empty).** Breakdown: 72% resolved from
+  `text/plain`, 27% via the new HTML fallback.
+- ⚠️ **Correction to an earlier figure.** This file previously claimed "40% of mail (16/40) is
+  HTML-only with no usable `text/plain`." **That does not reproduce.** Measured directly by running
+  the old extraction logic against a fresh 40-message sample: it returned empty for **2 of 40 (5%)**,
+  not 16. The fix is still worth having — 5% → 0% — but the problem was roughly eight times smaller
+  than recorded. The original number was almost certainly counting messages that *contain* an HTML
+  part rather than messages that *lack usable plain text*. The methodology wasn't written down, so it
+  couldn't be checked; record methodology with any measurement kept for later.
+- Image-only email remains unsolved: no text in the parts and a blank `snippet`, so there is nothing
+  to extract. `get_email_body()` reports `source: 'none'` for these. The real fix is a vision path,
+  since Haiku 4.5 is multimodal. Not built.
 - Gmail categories are a weak filter here — `-category:promotions -category:social` only removed 11
   of 100 messages.
 
 ---
 
-## ⚠️ Live footgun — do not run these two scripts
+## ✅ Cutover complete — the footgun is gone (2026-08-12)
 
-`scripts/gmail.py` and `scripts/gcalendar.py` still carry their **own** `SCOPES` lists (gmail's
-includes `gmail.modify`) and their own `InstalledAppFlow` fallback. If either runs against an expired
-token, that fallback fires and **overwrites the good read-only token with a write-capable one**,
-silently undoing the whole scope decision.
+Both scripts previously carried their own `SCOPES` (gmail's included `gmail.modify`) and their own
+`InstalledAppFlow` fallback, which would have overwritten the read-only token with a write-capable one
+on any refresh failure. Both now go through `ante_auth.load_credentials()`, which never opens a
+browser. **`run_gmail.sh` and `run_calendar.sh` are safe to run.** Verified: token scopes unchanged
+after running both.
 
-Until the cutover: don't run `run_gmail.sh` or `run_calendar.sh`. Use `run_auth_check.sh` for
-testing — it goes through `ante_auth` and is safe.
+What changed:
+
+| Change | Where |
+|---|---|
+| Auth via `ante_auth`, no browser fallback | both scripts |
+| `delete_event` removed | `gcalendar.py` |
+| `archive_email`, `label_email` removed | `gmail.py` |
+| `is_important()` → `always_surface()`, a floor not a gate | `gmail.py` |
+| `get_email_body()` recursive MIME walk + HTML fallback | `gmail.py` |
+| `mode='calendar'` vs `'rolling'` window | `gcalendar.py` |
+| Descriptions capped at 500 chars | `gcalendar.py` |
+| Cross-calendar duplicate events collapsed | `gcalendar.py` |
+| Both scripts return a `report` alongside data | both |
+| Skills symlinked from repo → workspace | `skills/` |
+
+**The `report` object is the important structural change.** Every pillar now returns provenance
+(`calendars_queried`, `scanned`, `failures`, `truncated`) next to its data, because an empty result
+was previously ambiguous between "nothing to report" and "silently broken" — the single most
+recurring failure shape in this project. The scripts also exit non-zero on partial failure.
 
 ---
 
 ## Next steps
 
-1. **Script cutover** ← everything is blocked on this
-   - Point `gcalendar.py` and `gmail.py` at `ante_auth`; delete their local `SCOPES` and browser-flow
-     fallback (kills the footgun above)
-   - Remove `delete_event` from `gcalendar.py`; keep `create_event`
-   - Remove `archive_email` and `label_email` from `gmail.py`
-   - Rework `is_important()` into an override rather than a gate (see decision above)
-   - Add HTML fallback + recursive part-walking to `get_email_body()`
-   - Collapse repo skills and workspace skills into one source of truth
-2. **`scripts/tasks.py`** — mirrors `gmail.py`; read + add + complete, **no delete**
-3. **Briefing assembler** — one message combining all three pillars
-4. **Restart the gateway**, confirm Discord actually connects (see below), fire one briefing by hand
-5. Later: university forwarding setup; news fetch; cron scheduling
+1. **Briefing assembler** — one message combining all three pillars. Each pillar returns
+   `(data, report)`; the assembler must surface `failures` rather than rendering a broken pillar as
+   "nothing today", which is the whole point of the report objects.
+2. **Restart the gateway**, confirm Discord actually connects (see below), fire one briefing by hand
+3. Later: university forwarding setup; news fetch; cron scheduling
 
 ---
 
@@ -212,8 +276,31 @@ testing — it goes through `ante_auth` and is safe.
   Network is fine now (Discord API returns 200). It's been wedged ~6 days and needs a restart.
 - **`~/.openclaw/openclaw.json` has a trailing comma** on line 9 — invalid strict JSON. OpenClaw
   parses it leniently; any tool that doesn't will hard-fail on the whole config.
-- `get_events(days=1)` fetches a **rolling `now → now+24h`**, not "today" — at 9pm you get tomorrow
-  morning.
-- README and `docs/product-summary.md` still advertise email drafting and archive/label, which the
-  read-only Gmail decision removes. README has been corrected; the product summary is kept as the
-  original spec.
+- ⚠️ **The timezone was hardcoded to `America/Detroit` while every calendar on the account is
+  `America/Los_Angeles`.** Every event Ante created would have landed **3 hours off**, with a
+  confirmation that read as correct. Now resolved at runtime from the primary calendar
+  (`ante_auth.local_timezone()`), falling back to the system timezone. Verified: asking for 15:00 now
+  stores 15:00−08:00 and displays as 15:00. Cached with a 1-hour TTL so a long-running OpenClaw
+  process can't pin a stale zone after a relocation; DST needs no refresh since a `ZoneInfo` is a
+  zone, not an offset.
+- **For the assembler:** calendars can each carry their own timezone (`Family` is UTC here), and
+  `get_events()` returns each event's raw offset. The assembler must render everything in
+  `ante_auth.local_timezone()` rather than printing raw strings, or a UTC-calendar event will be
+  displayed hours off.
+- **Google Tasks due dates are date-only.** The API accepts RFC3339 but silently discards the time,
+  so a task cannot be due at 3pm. `add_task()` takes `YYYY-MM-DD` and rejects anything else; the
+  skill file tells the agent not to claim it set a time. Timed reminders are calendar events.
+- **No Gmail batching.** `get_recent_emails()` still does one serial `messages.get` per message.
+  Fine at current volume (16 messages ≈ 2s), but it scales linearly and the batch endpoint is the
+  fix if a wider window is ever used.
+- **Image-only email produces no text at all** — `get_email_body()` returns `source: 'none'`. Needs
+  the vision path.
+- **Calendar event descriptions are untrusted input.** Anyone who can send an invite controls text
+  that reaches the model. Capped at 500 chars and the skill file says not to follow instructions in
+  them, but that's a prompt-level mitigation, not a hard boundary.
+- `docs/product-summary.md` still describes email drafting and archive/label. Kept deliberately as
+  the original spec, with a banner explaining the divergence; README is corrected.
+
+**Fixed since last update:** the browser-consent footgun, scope duplication, `delete_event`,
+`archive_email`/`label_email`, the keyword gate, `get_email_body()`, skill divergence, the
+rolling-vs-calendar window, and the 0-byte skill placeholders.

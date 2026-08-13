@@ -10,6 +10,10 @@ config/secrets.yaml
 *.key
 client_secret*.json
 
+# Private development log -- contains detailed failure notes, measurements, and
+# specifics that are useful precisely because they aren't sanitized. Never push.
+DEVLOG.md
+
 # Python
 __pycache__/
 *.pyc
@@ -22,3 +26,6 @@ venv/
 *.swp
 .idea/
 .vscode/
+
+# Personal Claude Code permission rules -- machine-specific, not shared
+.claude/settings.local.json

@@ -26,16 +26,26 @@ Beyond the scheduled briefings, Ante is available on-demand in Discord at any ti
 | Piece | State |
 |---|---|
 | Google OAuth for all three APIs | ✅ Working and verified |
-| Calendar — read events | ✅ Working (`get_events`) |
+| Calendar — read events | ✅ Working (`get_events`, calendar-day or rolling window) |
 | Calendar — create events | ✅ Working (`create_event`) |
-| Gmail — read and flag recent mail | ✅ Working (`get_flagged_emails`) |
-| Google Tasks | ❌ Not started — no code yet |
+| Calendar — reschedule / move events | ✅ Working (`update_event`, preserves duration) |
+| Gmail — read recent mail | ✅ Working (`get_recent_emails`) |
+| Gmail — extract message bodies | ✅ Working (`get_email_body`, plain + HTML) |
+| Tasks — read, add, complete, reopen | ✅ Working (`tasks.py`) |
+| Tasks — change due date / notes | ✅ Working (`update_task`) |
 | News digest | ❌ Not started — no code yet |
 | Briefing assembler (combining the pillars into one message) | ❌ Not started |
 | Scheduled morning / evening runs | ❌ **No cron is configured.** Nothing runs automatically. |
-| Conflict detection, study blocking, event rescheduling | ❌ Not started |
+| Conflict detection, study blocking, prep time | ❌ Not started |
+| Image-only email (no text anywhere) | ❌ Needs a vision path |
 
-So the scheduled briefings described above don't happen yet, and the pillars aren't wired together. Reading calendar events and flagging recent email both work when run by hand.
+All three Google pillars now read and write real data when run by hand, each returning a status
+report alongside its data so an empty result can be told apart from a failed one. Timezone is read
+from the user's primary calendar rather than hardcoded. What's missing is the layer above: nothing
+combines them into a briefing, and nothing runs on a schedule.
+
+Deliberately absent, not missing: Gmail cannot send, draft, archive or label; nothing deletes
+calendar events, tasks, or task lists. See [Permissions](#permissions).
 
 ---
 
@@ -54,7 +64,9 @@ Ante's Google access is deliberately narrow. [`scripts/ante_auth.py`](scripts/an
 
 Calendar and Tasks are read/write because blocking study time and managing tasks require it.
 
-⚠️ **Two caveats, both being fixed in the current migration:** `scripts/gmail.py` and `scripts/gcalendar.py` haven't been moved onto `ante_auth.py` yet — they still declare their own scope lists and their own browser-consent fallback. And `gcalendar.py` still contains a `delete_event` function, which the no-deletion policy removes. The scopes above are what's actually granted; the migration is what makes the code match. See [STATUS.md](STATUS.md).
+Neither is used for deletion, and that's enforced in code rather than by the scope: `calendar.events` permits `events.delete` and `tasks` permits deleting tasks and whole lists, so the guarantee is that no delete function exists. Moving an event is a patch, never a delete-and-recreate.
+
+None of the three scripts can open a browser. Interactive consent lives only in `scripts/auth_setup.py`, run by hand — so an error path can never silently re-grant broader scopes than the policy allows.
 
 ---
 
@@ -80,8 +92,9 @@ I was spending too much time each morning context-switching between Gmail, Googl
 
 - [x] Phase 1 — OpenClaw installed and connected to Discord
 - [x] Google OAuth — scopes locked down and verified across all three APIs
-- [ ] Phase 2 — Google Calendar: read and create work; guardrails and migration in progress
-- [ ] Phase 3 — Gmail read path built; Google Tasks not started
+- [x] Phase 2 — Google Calendar: read, create, and reschedule
+- [x] Phase 3 — Gmail read path and Google Tasks read/write
+- [ ] Briefing assembler — combine the three pillars into one message
 - [ ] Phase 4 — Morning briefing cron and news digest
 - [ ] Phase 5 — Evening check-in, smart triggers, study block logic
 

@@ -1,84 +1,220 @@
+"""Google Calendar access for Ante.
+
+Auth comes from ante_auth. This module must never open a browser: a briefing run
+has no one to show a consent screen to, and the old browser fallback here would
+silently re-grant broader scopes than the scope policy allows. See ante_auth.
+
+There is deliberately NO delete_event(). The calendar.events scope permits
+events.delete, so "Ante never deletes calendar events" is not enforced by Google
+-- it is enforced by this file not having the function. Do not add one back
+without changing the scope policy in ante_auth.py at the same time.
+"""
+
 import datetime
-import os
 import json
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
+import os
+import sys
 
-SCOPES = ['https://www.googleapis.com/auth/calendar']
-CREDENTIALS_FILE = os.path.expanduser('~/.openclaw/google_credentials.json')
-TOKEN_FILE = os.path.expanduser('~/.openclaw/google_token.json')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-def get_calendar_service():
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_FILE, 'w') as token:
-            token.write(creds.to_json())
-    return build('calendar', 'v3', credentials=creds)
+import ante_auth
 
-def get_events(days=1):
-    service = get_calendar_service()
-    now = datetime.datetime.now(datetime.UTC).isoformat()
-    end = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=days)).isoformat()
-    
+
+def LOCAL_TZ():
+    """Resolved from the primary calendar, not hardcoded. See ante_auth."""
+    return ante_auth.local_timezone()
+
+
+# Event descriptions are unbounded and can be enormous -- a single invite pulled
+# ~4KB of marketing copy in testing. Two reasons to cap them: they would dominate
+# the briefing's token budget, and anyone who can send a calendar invite controls
+# that text, which then reaches an LLM with shell access. Same untrusted-input
+# position as email, so treat it the same way.
+MAX_DESCRIPTION_CHARS = 500
+
+
+def _window(days, mode, now=None):
+    """Return (start, end) as aware datetimes in LOCAL_TZ.
+
+    'calendar' -- local midnight today through the end of the last day in range.
+                  This is what a briefing means by "today".
+    'rolling'  -- now through now + days*24h.
+
+    The two diverge sharply in the evening: at 9pm 'rolling' is mostly tomorrow,
+    which is why a briefing should not use it to say "today".
+    """
+    now = now or datetime.datetime.now(LOCAL_TZ())
+    if mode == 'rolling':
+        return now, now + datetime.timedelta(days=days)
+    if mode == 'calendar':
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return start, start + datetime.timedelta(days=days)
+    raise ValueError(f"unknown window mode {mode!r} (want 'calendar' or 'rolling')")
+
+
+def get_events(days=1, mode='calendar'):
+    """Events across every calendar in the window.
+
+    Returns (events, report). The report exists because an empty event list
+    means nothing on its own -- a permission error, a failed calendar, and a
+    genuinely free day all produce []. report tells you how many calendars were
+    actually queried and which ones failed, so callers can tell "you have
+    nothing on" from "this is broken".
+    """
+    service = ante_auth.get_service('calendar')
+    start, end = _window(days, mode)
+
+    report = {
+        'window_mode': mode,
+        'window_start': start.isoformat(),
+        'window_end': end.isoformat(),
+        'calendars_found': 0,
+        'calendars_queried': 0,
+        'duplicates_collapsed': 0,
+        'failures': [],
+    }
+
+    try:
+        calendars = service.calendarList().list().execute().get('items', [])
+    except Exception as exc:
+        # Without calendar.calendarlist.readonly this 403s, and every calendar
+        # silently disappears. Surface it instead of returning an empty day.
+        report['failures'].append({'calendar': '*', 'error': f'{type(exc).__name__}: {exc}'})
+        return [], report
+
+    report['calendars_found'] = len(calendars)
+
     all_events = []
-    calendars = service.calendarList().list().execute().get('items', [])
-    
     for calendar in calendars:
-        events_result = service.events().list(
-            calendarId=calendar['id'],
-            timeMin=now,
-            timeMax=end,
-            singleEvents=True,
-            orderBy='startTime'
-        ).execute()
-        events = events_result.get('items', [])
-        for event in events:
+        try:
+            events_result = service.events().list(
+                calendarId=calendar['id'],
+                timeMin=start.isoformat(),
+                timeMax=end.isoformat(),
+                singleEvents=True,
+                orderBy='startTime',
+            ).execute()
+        except Exception as exc:
+            # One inaccessible calendar must not zero out the others.
+            report['failures'].append({
+                'calendar': calendar.get('summary', calendar['id']),
+                'error': f'{type(exc).__name__}: {exc}',
+            })
+            continue
+
+        report['calendars_queried'] += 1
+        for event in events_result.get('items', []):
+            description = event.get('description', '') or ''
             all_events.append({
                 'id': event['id'],
-                'calendar': calendar['summary'],
+                'calendar': calendar.get('summary', ''),
+                # Needed to update the event later -- an event ID is only
+                # meaningful together with the calendar it lives on, and most of
+                # these are not on 'primary'.
+                'calendar_id': calendar['id'],
                 'title': event.get('summary', 'No title'),
                 'start': event['start'].get('dateTime', event['start'].get('date')),
                 'end': event['end'].get('dateTime', event['end'].get('date')),
                 'location': event.get('location', ''),
-                'description': event.get('description', '')
-            })    
-    all_events.sort(key=lambda x: x['start'])
-    return all_events
+                'description': description[:MAX_DESCRIPTION_CHARS],
+                'description_truncated': len(description) > MAX_DESCRIPTION_CHARS,
+            })
+
+    # The same event often lands on two calendars (a shared calendar plus a
+    # personal copy of the invite), which would double it in the briefing.
+    # Collapse on time+title and record how many were merged, so a collapse is
+    # visible rather than silent.
+    deduped, seen = [], set()
+    for event in all_events:
+        key = (event['title'], event['start'], event['end'])
+        if key in seen:
+            report['duplicates_collapsed'] += 1
+            continue
+        seen.add(key)
+        deduped.append(event)
+
+    deduped.sort(key=lambda x: x['start'])
+    return deduped, report
+
 
 def create_event(title, start_time, end_time, description='', location=''):
-    service = get_calendar_service()
+    """Create an event on the primary calendar. Times are ISO 8601, local tz."""
+    service = ante_auth.get_service('calendar')
     event = {
         'summary': title,
         'location': location,
         'description': description,
-        'start': {
-            'dateTime': start_time,
-            'timeZone': 'America/Detroit',
-        },
-        'end': {
-            'dateTime': end_time,
-            'timeZone': 'America/Detroit',
-        },
+        'start': {'dateTime': start_time, 'timeZone': str(LOCAL_TZ())},
+        'end': {'dateTime': end_time, 'timeZone': str(LOCAL_TZ())},
     }
-    event = service.events().insert(calendarId='primary', body=event).execute()
-    return event.get('htmlLink')
+    created = service.events().insert(calendarId='primary', body=event).execute()
+    return created.get('htmlLink')
 
-def delete_event(event_id, calendar_id='primary'):
-    service = get_calendar_service()
-    service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
-    return f"Event {event_id} deleted."
+
+def update_event(event_id, calendar_id='primary', title=None, start_time=None,
+                 end_time=None, description=None, location=None):
+    """Change an existing event. Only the fields you pass are touched.
+
+    This is what "reschedule my 3pm to tomorrow" runs. It is a patch, not a
+    delete-and-recreate, so the event keeps its ID, its guests and their RSVPs.
+    Recreating instead would lose all of that -- and Ante cannot delete anyway.
+
+    `calendar_id` matters: most events are not on 'primary'. Pass the
+    `calendar_id` from get_events(); the default is only right for events Ante
+    created itself.
+
+    Passing start_time without end_time keeps the original duration, which is
+    what a reschedule almost always means.
+    """
+    service = ante_auth.get_service('calendar')
+    body = {}
+
+    if title is not None:
+        body['summary'] = title
+    if description is not None:
+        body['description'] = description
+    if location is not None:
+        body['location'] = location
+
+    if start_time and not end_time:
+        existing = service.events().get(
+            calendarId=calendar_id, eventId=event_id).execute()
+        old_start = existing['start'].get('dateTime')
+        old_end = existing['end'].get('dateTime')
+        if not old_start or not old_end:
+            raise ValueError(
+                'Cannot shift an all-day event by time. Pass both start_time '
+                'and end_time, or edit it in Google Calendar.')
+        duration = (datetime.datetime.fromisoformat(old_end)
+                    - datetime.datetime.fromisoformat(old_start))
+        new_start = datetime.datetime.fromisoformat(start_time)
+        end_time = (new_start + duration).isoformat()
+
+    if start_time:
+        body['start'] = {'dateTime': start_time, 'timeZone': str(LOCAL_TZ())}
+    if end_time:
+        body['end'] = {'dateTime': end_time, 'timeZone': str(LOCAL_TZ())}
+
+    if not body:
+        raise ValueError('update_event called with nothing to change')
+
+    updated = service.events().patch(
+        calendarId=calendar_id, eventId=event_id, body=body).execute()
+    return {
+        'id': updated['id'],
+        'title': updated.get('summary', ''),
+        'start': updated['start'].get('dateTime', updated['start'].get('date')),
+        'end': updated['end'].get('dateTime', updated['end'].get('date')),
+        'location': updated.get('location', ''),
+        'link': updated.get('htmlLink', ''),
+    }
+
 
 if __name__ == '__main__':
-    # Test reading
-    events = get_events(days=1)
-    print(json.dumps(events, indent=2))
-    
+    days = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    mode = sys.argv[2] if len(sys.argv) > 2 else 'calendar'
+    events, report = get_events(days=days, mode=mode)
+    print(json.dumps({'report': report, 'events': events}, indent=2))
+    # Non-zero exit when a calendar failed, so a broken run is not mistaken for
+    # a free day by anything checking the exit code.
+    sys.exit(1 if report['failures'] else 0)

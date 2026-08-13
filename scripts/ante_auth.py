@@ -32,7 +32,9 @@ Scope policy (deliberate, per service):
                          choice; the scope will not stop you.
 """
 
+import datetime
 import os
+from zoneinfo import ZoneInfo
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -102,6 +104,59 @@ def get_service(name):
     if name not in _API_VERSIONS:
         raise ValueError(f'Unknown service {name!r}')
     return build(name, _API_VERSIONS[name], credentials=load_credentials())
+
+
+_LOCAL_TZ = None
+_LOCAL_TZ_AT = None
+
+# Re-resolve the timezone this often. Relocation is the only thing that changes
+# it and that happens on the scale of months, so this is deliberately generous;
+# the point is only that a long-lived process cannot pin the wrong zone forever.
+_LOCAL_TZ_TTL = datetime.timedelta(hours=1)
+
+
+def local_timezone():
+    """The timezone the user actually sees their calendar in.
+
+    Resolved from the primary calendar rather than hardcoded, because it *was*
+    hardcoded to America/Detroit while every calendar on the account is
+    America/Los_Angeles -- so every event Ante created landed three hours off,
+    with a confirmation that read as correct. A student moves between term-time
+    and internship timezones and will not remember to update a constant.
+
+    Anchoring to the calendar's own setting also guarantees Ante can never
+    disagree with what Google renders: "3pm" means the same instant in both.
+
+    Cached with a TTL rather than forever. Every script today is a short-lived
+    subprocess, so this never matters -- but if the OpenClaw gateway ever
+    imports these modules into a long-running process, a permanent cache would
+    pin a stale zone across a move until someone restarted it.
+
+    A cached ZoneInfo is a zone, not an offset, so DST is still applied per date
+    and needs no refresh. Only relocation does.
+
+    Falls back to the system timezone if the lookup fails, which is still far
+    better than a fixed guess.
+    """
+    global _LOCAL_TZ, _LOCAL_TZ_AT
+    now = datetime.datetime.now(datetime.UTC)
+    if _LOCAL_TZ is not None and now - _LOCAL_TZ_AT < _LOCAL_TZ_TTL:
+        return _LOCAL_TZ
+
+    resolved = None
+    try:
+        # calendarList.get is covered by calendar.calendarlist.readonly.
+        # calendar.settings.readonly would be a new scope, so avoid it.
+        tz = get_service('calendar').calendarList().get(
+            calendarId='primary').execute().get('timeZone')
+        resolved = ZoneInfo(tz) if tz else None
+    except Exception:
+        resolved = None
+    if resolved is None:
+        resolved = datetime.datetime.now().astimezone().tzinfo
+
+    _LOCAL_TZ, _LOCAL_TZ_AT = resolved, now
+    return _LOCAL_TZ
 
 
 def authorize():
