@@ -322,6 +322,20 @@ they can't be re-derived from anything. `scripts/backup_workspace.sh` snapshots 
 change; the manifest stamps its own date so a stale snapshot is visible. Survives a reset, **not** a
 lost disk.
 
+**Workspace instruction files corrected (2026-08-13).** `BOOTSTRAP.md`, `TOOLS.md`, `USER.md` and
+`AGENTS.md` still described archiving email, confirming deletions, `skills/*.md` paths, and a
+hardcoded Detroit timezone — none of which are true. `TOOLS.md` in particular was a *second source of
+truth* for commands and told the agent to run `source venv/bin/activate && python3 …`, which exec
+preflight rejects; it now defers to the skill files. `SOUL.md` was left alone (personality, no stale
+claims). Re-snapshot with `scripts/backup_workspace.sh` after any further edits.
+
+**Discord group-chat identity fixed.** OpenClaw passes sender identity in a guild channel as
+*untrusted metadata*, and `guilds: {"*": {}}` was an empty allowlist under `groupPolicy: allowlist` —
+so Ante correctly refused to act on Utsav's Google account from `#general`. The owner's Discord
+sender id is now in `channels.discord.guilds."*".users`, and `USER.md`/`AGENTS.md` teach
+identification by **sender id**, never display name. `openclaw.json` is also now strict JSON (the
+trailing comma is gone).
+
 **Fixed since last update:** the browser-consent footgun, scope duplication, `delete_event`,
 `archive_email`/`label_email`, the keyword gate, `get_email_body()`, skill divergence, the
 rolling-vs-calendar window, and the 0-byte skill placeholders.
