@@ -35,7 +35,7 @@ as scoped.
 |---|---|
 | Config | `~/.openclaw/openclaw.json`. **`config/config.yaml` in this repo is empty (0 bytes)** and unused. |
 | Brain / system prompt | `~/.openclaw/workspace/` — `BOOTSTRAP.md`, `SOUL.md`, `AGENTS.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`. **There is no `system.md`.** |
-| Skills the agent loads | `~/.openclaw/workspace/skills/{gcalendar,gmail,tasks}` are now **symlinks into this repo** (`skills/gcalendar/`, `skills/gmail/`, `skills/tasks/`). Editing the tracked file changes agent behavior directly; they can no longer diverge. Pre-cutover copies backed up at `~/.openclaw/workspace/skills.backup-2026-08-12`. |
+| Skills the agent loads | `~/.openclaw/workspace/skills/{gcalendar,gmail,tasks}` are **copies** of `skills/*/SKILL.md`, written by `scripts/sync_skills.sh`. ⚠️ **Do not symlink** — OpenClaw refuses symlinks that escape the skills root (`reason=symlink-escape`) and the agent then loads *no* skills, with only a stderr warning. Re-run the sync after editing skills, then restart the gateway. Editing the tracked file changes agent behavior directly; they can no longer diverge. Pre-cutover copies backed up at `~/.openclaw/workspace/skills.backup-2026-08-12`. |
 | Skills in this repo | `skills/gcalendar/SKILL.md`, `skills/gmail/SKILL.md` and `skills/tasks/SKILL.md` are live. `skills/morning-briefing.md`, `skills/evening-checkin.md`, `skills/news-fetch.md` are TODO placeholders (they were 0 bytes, which read as "done"). |
 | Model | Claude Haiku 4.5 (`anthropic/claude-haiku-4-5-20251001`) |
 | Delivery | Discord (app + channel IDs in local config, not here) |
