@@ -29,3 +29,7 @@ venv/
 
 # Personal Claude Code permission rules -- machine-specific, not shared
 .claude/settings.local.json
+
+# Snapshot of the OpenClaw workspace brain files (scripts/backup_workspace.sh).
+# Local redundancy only -- these can carry personal detail and this repo is public.
+workspace/

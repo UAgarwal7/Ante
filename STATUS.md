@@ -271,9 +271,22 @@ recurring failure shape in this project. The scripts also exit non-zero on parti
 
 ## Known problems not yet fixed
 
-- **Discord liveness unverified.** The `openclaw-gateway` process has been up since Aug 1, but its
-  log dies mid-reconnect on **Aug 5 10:28** with `ENOTFOUND discord.com` — the machine was offline.
-  Network is fine now (Discord API returns 200). It's been wedged ~6 days and needs a restart.
+- 🔴 **The Discord channel is stopped, and the bot is offline.** Confirmed via
+  `openclaw channels status`: `enabled, configured, stopped, disconnected, error: channel stop timed
+  out after 5000ms` — residue from the failed Aug 5 reconnect. The gateway *process* is alive and
+  port 18789 listens, which is why it looked healthy.
+  ⚠️ **`openclaw health` is not sufficient to check this.** It reports `Discord: ok` because it can
+  reach Discord's REST API; presence needs the gateway websocket, which is down. Use
+  `openclaw channels status` — it's the only one that reports the channel's real state.
+  Fix: `launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway`. Not `openclaw gateway`, which
+  refuses while the LaunchAgent owns the process.
+- 🔴 **The Anthropic credential is dead** — `Claude: HTTP 401: Invalid bearer token`. The configured
+  model is `anthropic/claude-haiku-4-5-20251001`, so **Ante cannot answer anything** until this is
+  re-authorized, even once Discord reconnects. Fix with `openclaw configure`. The `openai-codex`
+  profile is healthy, so it's specifically Anthropic that expired.
+- **The running gateway predates today's skill rewrite** (up since Aug 1). If it caches skills at
+  startup it's still using the old ones referencing `delete_event`/`archive_email`. The restart is
+  what loads the new skills.
 - **`~/.openclaw/openclaw.json` has a trailing comma** on line 9 — invalid strict JSON. OpenClaw
   parses it leniently; any tool that doesn't will hard-fail on the whole config.
 - ⚠️ **The timezone was hardcoded to `America/Detroit` while every calendar on the account is
@@ -300,6 +313,14 @@ recurring failure shape in this project. The scripts also exit non-zero on parti
   them, but that's a prompt-level mitigation, not a hard boundary.
 - `docs/product-summary.md` still describes email drafting and archive/label. Kept deliberately as
   the original spec, with a banner explaining the divergence; README is corrected.
+
+**Workspace brain files are now backed up.** `~/.openclaw/workspace/*.md` — `SOUL.md`, `AGENTS.md`,
+`BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md` — held Ante's personality and
+user context and existed in **exactly one place**, deleted by `openclaw reset`. Unlike the scripts
+they can't be re-derived from anything. `scripts/backup_workspace.sh` snapshots them to `workspace/`
+(gitignored — they can carry personal detail and this repo is public). Re-run it whenever they
+change; the manifest stamps its own date so a stale snapshot is visible. Survives a reset, **not** a
+lost disk.
 
 **Fixed since last update:** the browser-consent footgun, scope duplication, `delete_event`,
 `archive_email`/`label_email`, the keyword gate, `get_email_body()`, skill divergence, the
