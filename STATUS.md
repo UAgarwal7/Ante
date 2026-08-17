@@ -336,6 +336,16 @@ sender id is now in `channels.discord.guilds."*".users`, and `USER.md`/`AGENTS.m
 identification by **sender id**, never display name. `openclaw.json` is also now strict JSON (the
 trailing comma is gone).
 
+**Session reset is automatable (2026-08-16).** `/new` cannot be scripted — it's intercepted by the
+chat surface, so `--message "/new"` arrives as plain text at every programmatic layer. OpenClaw's
+scheduler is also closed: `cron.*` needs `operator.write` and this CLI is paired `operator.read` only.
+`scripts/reset_session.py` reproduces what `/new` does on disk (archive transcript, drop store entry)
+with no Gateway involved, and `scripts/install_reset_schedule.sh` schedules it via launchd — which
+follows system local time, so unlike an OpenClaw cron job it survives a move between timezones.
+⚠️ It writes OpenClaw's private state; re-verify after any version upgrade.
+
+**Not yet installed** — run `./scripts/install_reset_schedule.sh [HOUR]` to enable it.
+
 **Fixed since last update:** the browser-consent footgun, scope duplication, `delete_event`,
 `archive_email`/`label_email`, the keyword gate, `get_email_body()`, skill divergence, the
 rolling-vs-calendar window, and the 0-byte skill placeholders.
