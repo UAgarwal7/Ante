@@ -1,6 +1,6 @@
 # Ante — Status
 
-**Last updated:** 2026-08-12
+**Last updated:** 2026-08-16
 
 Current engineering state. [docs/product-summary.md](docs/product-summary.md) is the original spec
 (April 2026) and is aspirational in places — where the two disagree, this file is right.
@@ -12,20 +12,13 @@ Current engineering state. [docs/product-summary.md](docs/product-summary.md) is
 
 ## TL;DR
 
-Google auth is **fixed and verified**, and the **script cutover is done** (2026-08-12). Both
-`gcalendar.py` and `gmail.py` now go through `ante_auth`, the browser-consent footgun is gone, write
-functions that contradicted the scope policy are removed, the keyword filter is inverted from a gate
-to a floor, and skills have one source of truth. Calendar and Gmail both run clean and return real
-data.
+**Ante works.** It answers questions in Discord and writes real data to Google — a natural-language
+request created a correctly-dated task on 2026-08-13. Gateway, Discord, model auth, identity, skills
+and all three Google pillars are live and verified.
 
-`scripts/tasks.py` is now built and verified too — **all three pillars run clean and return real
-data**, each with a `report` and a non-zero exit on partial failure.
+What's missing is the *scheduled* half: nothing assembles a briefing, and nothing runs on a timer.
 
-The two write functions the spec promised but never had — `update_event` (reschedule) and
-`update_task` (change a due date) — are now built and verified. **Google functionality is complete**
-as scoped.
-
-**Next action:** the briefing assembler, then OpenClaw wiring.
+**Next action:** use it for a few days, then build the briefing assembler.
 
 ---
 
@@ -33,18 +26,15 @@ as scoped.
 
 | Thing | Reality |
 |---|---|
-| Config | `~/.openclaw/openclaw.json`. **`config/config.yaml` in this repo is empty (0 bytes)** and unused. |
-| Brain / system prompt | `~/.openclaw/workspace/` — `BOOTSTRAP.md`, `SOUL.md`, `AGENTS.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`. **There is no `system.md`.** |
-| Skills the agent loads | `~/.openclaw/workspace/skills/{gcalendar,gmail,tasks}` are **copies** of `skills/*/SKILL.md`, written by `scripts/sync_skills.sh`. ⚠️ **Do not symlink** — OpenClaw refuses symlinks that escape the skills root (`reason=symlink-escape`) and the agent then loads *no* skills, with only a stderr warning. Re-run the sync after editing skills, then restart the gateway. Editing the tracked file changes agent behavior directly; they can no longer diverge. Pre-cutover copies backed up at `~/.openclaw/workspace/skills.backup-2026-08-12`. |
-| Skills in this repo | `skills/gcalendar/SKILL.md`, `skills/gmail/SKILL.md` and `skills/tasks/SKILL.md` are live. `skills/morning-briefing.md`, `skills/evening-checkin.md`, `skills/news-fetch.md` are TODO placeholders (they were 0 bytes, which read as "done"). |
+| Config | `~/.openclaw/openclaw.json` (strict JSON since 2026-08-13). **`config/config.yaml` in this repo is empty (0 bytes)** and unused. |
+| Brain / system prompt | `~/.openclaw/workspace/` — `BOOTSTRAP.md`, `SOUL.md`, `AGENTS.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md`. **There is no `system.md`.** Snapshotted to `workspace/` (gitignored) by `scripts/backup_workspace.sh`. |
+| Skills the agent loads | `~/.openclaw/workspace/skills/{gcalendar,gmail,tasks}` are **copies** of `skills/*/SKILL.md`, written by `scripts/sync_skills.sh`. ⚠️ **Never symlink** — OpenClaw refuses symlinks that escape the skills root (`reason=symlink-escape`) and the agent silently loads *no* skills. Re-run the sync after editing, then restart the gateway. |
+| Skills in this repo | `skills/{gcalendar,gmail,tasks}/SKILL.md` are live. `skills/morning-briefing.md`, `skills/evening-checkin.md`, `skills/news-fetch.md` are TODO placeholders. |
 | Model | Claude Haiku 4.5 (`anthropic/claude-haiku-4-5-20251001`) |
-| Delivery | Discord (app + channel IDs in local config, not here) |
-| Google Cloud | Desktop OAuth client (project ID in local config, not here) |
+| Delivery | Discord, `#general` guild channel. Owner's sender id is allowlisted in `channels.discord.guilds."*".users`. |
+| Gateway | launchd `ai.openclaw.gateway`, loopback port 18789, Control UI at `http://127.0.0.1:18789/` |
+| OpenClaw version | `2026.4.12` — **`2026.7.1-2` is available** |
 | Google account | Personal Gmail — **not** the university account |
-
-✅ **Skill divergence is resolved.** Before the cutover the workspace copy documented `delete_event`,
-`archive_email` and `label_email` — all of which are now gone from the code. The symlink means that
-class of drift can't recur.
 
 ---
 
@@ -165,187 +155,102 @@ so nothing can be sent, but Calendar has write access — a malicious email coul
 calendar event. Low stakes, noted deliberately.
 
 ---
+---
 
-## What's done and verified
+## What works today (verified)
 
-`./scripts/run_auth_check.sh` passes — all four scopes granted, all three APIs responding
-(calendar: 4 calendars, gmail: profile OK, tasks: 1 task list).
+| Piece | Evidence |
+|---|---|
+| Google auth | `run_auth_check.sh` passes; 4 scopes, all three APIs respond |
+| Calendar read | 4 calendars queried, 0 failures; real event found on the shared university calendar |
+| Calendar write | `create_event` + `update_event`; reschedule preserves duration; all-day guard fires |
+| Gmail read | 16–19 messages scanned per 24h, 0 failures; body extraction 40/40 (72% plain, 27% HTML fallback) |
+| Tasks read/write | add → complete → reopen → complete; overdue canary; date validation rejects `'next tuesday'` |
+| Gateway | running, RPC probe ok |
+| Discord | `running, connected, bot:@Ante` |
+| Identity | owner's sender id allowlisted; Ante acts for him in `#general`, refuses for others |
+| Skills | 3/3 `✓ ready` from `openclaw-workspace` |
+| End to end | *"make a task tomorrow to do my Codesignal Assessment"* → `'Do my Code Signal assessment' due=2026-08-14` |
 
-**New files:**
+**Cost, measured.** On Haiku a full Discord exchange is **~2.7¢** (4 API calls, ~0.7¢ each). The same
+question on Sonnet 4.6 was **9.3¢**. `openclaw configure` silently switched the model to Sonnet while
+setting a credential — check `agents.defaults.model.primary` after any interactive setup.
 
-- [scripts/ante_auth.py](scripts/ante_auth.py) — single source of truth for scopes + shared auth.
-  `load_credentials()` deliberately **never opens a browser**; it refreshes or raises `AuthError`, so
-  a scheduled briefing fails loudly instead of hanging on an invisible consent screen.
-- [scripts/auth_setup.py](scripts/auth_setup.py) — interactive consent flow; backs up the old token,
-  diffs granted vs requested afterward.
-- [scripts/auth_check.py](scripts/auth_check.py) — prints token scopes, then makes one real read-only
-  call per API (a correctly-scoped token still fails if an API was never enabled).
-- `scripts/run_auth_setup.sh`, `scripts/run_auth_check.sh` — venv wrappers.
-
-**Google Cloud console:** OAuth consent screen set to **Production**. This is what prevents the
-7-day refresh-token expiry that killed the previous token (`invalid_grant`, dead since ~2026-04-15).
-If auth dies again, check publishing status before anything else — `ante_auth.py`'s error message
-says so explicitly.
+Cost is dominated by a **~10K-token system prompt** re-sent on every call (55 registered skills, of
+which 13 are ready and 3 are ours, plus workspace files and tool definitions). Output is ~3% of spend.
+Trimming unused bundled skills is the next real lever.
 
 ---
 
-## Live data as of 2026-08-12 (post-cutover)
+## Open problems
 
-| Pillar | State |
-|---|---|
-| Calendar | ✅ **Proven working.** 4 calendars found, 4 queried, 0 failures. 0 events in the next 24h but **1 event within 7 days** — on the shared university calendar, which confirms the share works end to end. 1 cross-calendar duplicate collapsed. |
-| Gmail | ✅ **Proven working.** 16 messages scanned in 24h, 0 failures, not truncated. 1 matched `always_surface`. |
-| Tasks | ✅ **Proven working.** 1 list found, 1 queried, 0 failures. Read, add, complete, reopen, overdue detection and due-date validation all exercised against live data. |
+**Blocked / needs a decision**
 
-**Every pillar now has a non-empty fixture, which is what makes these greens meaningful.** Calendar
-was widened to 7 days (at 24h it returned `[]`, which proved nothing); Tasks got a real task plus two
-throwaway canaries. Nothing here is a pass-on-empty result any more.
+- **The CLI is paired `operator.read` only.** Every `cron.*` and `gateway call` RPC fails with
+  `pairing required` — a scope error wearing a pairing message. Approve the upgrade in the Control UI
+  (`http://127.0.0.1:18789/`); the pending request expires quickly, so open the UI *before*
+  triggering it. This blocks OpenClaw-native scheduling.
+- **Session reset is built but not installed** — `./scripts/install_reset_schedule.sh [HOUR]`.
+- **OpenClaw is 3 months behind.** Upgrade separately from other changes, and expect the LaunchAgent
+  to need reinstalling (the plist hardcodes version and node paths). ⚠️ `reset_session.py` writes
+  OpenClaw's private state — re-verify it after any upgrade.
 
-The Tasks write path was verified end to end: add with a due date → complete → reopen → complete, plus
-an overdue canary dated 11 days ago to confirm `overdue` computes correctly and clears on completion,
-plus a rejected `due='next tuesday'` to confirm date validation. **Two completed canary tasks are
-left in `My Tasks`** — Ante deliberately cannot delete them; remove them in the Google Tasks UI if
-they bother you.
+**Not built**
 
-Note the Gmail numbers: **16 messages scanned, 1 flagged.** Under the old gate, the briefing would
-have seen exactly 1 message and the other 15 would never have reached the model. That is the change
-in concrete terms.
+- Briefing assembler, news fetch, cron scheduling, university forwarding
+- Conflict detection, study blocking, prep time
+- Vision path for image-only email (no text in parts, blank snippet)
 
-Other measurements worth not re-deriving:
-- **Body extraction now succeeds on 40/40 sampled messages (0% empty).** Breakdown: 72% resolved from
-  `text/plain`, 27% via the new HTML fallback.
-- ⚠️ **Correction to an earlier figure.** This file previously claimed "40% of mail (16/40) is
-  HTML-only with no usable `text/plain`." **That does not reproduce.** Measured directly by running
-  the old extraction logic against a fresh 40-message sample: it returned empty for **2 of 40 (5%)**,
-  not 16. The fix is still worth having — 5% → 0% — but the problem was roughly eight times smaller
-  than recorded. The original number was almost certainly counting messages that *contain* an HTML
-  part rather than messages that *lack usable plain text*. The methodology wasn't written down, so it
-  couldn't be checked; record methodology with any measurement kept for later.
-- Image-only email remains unsolved: no text in the parts and a blank `snippet`, so there is nothing
-  to extract. `get_email_body()` reports `source: 'none'` for these. The real fix is a vision path,
-  since Haiku 4.5 is multimodal. Not built.
-- Gmail categories are a weak filter here — `-category:promotions -category:social` only removed 11
-  of 100 messages.
+**Known constraints, handled but worth remembering**
+
+- **Heartbeat is disabled (`0m`)**, so a cron job with `--session main` would be scheduled and never
+  fire — those run "on the next heartbeat". Use `--session isolated`.
+- **Exec preflight refuses chained interpreter invocations** (`cd … && source venv/bin/activate &&
+  python3 …`). The wrappers exist for this reason. Skill write commands still use inline `python -c`;
+  task creation worked on 2026-08-13, but confirm that's the intended route rather than luck.
+- **Google Tasks due dates are date-only** — the time is silently discarded. Timed reminders are
+  calendar events. Watch that Ante *says* so rather than silently dropping the hour.
+- **Calendar event descriptions are untrusted input** — anyone who can send an invite controls text
+  that reaches the model. Capped at 500 chars; the skill says not to follow instructions in them.
+  That's a prompt-level mitigation, not a boundary.
+- **For the assembler:** calendars carry their own timezones (`Family` is UTC). Render everything
+  through `ante_auth.local_timezone()`, never raw offsets.
+- **No Gmail batching** — one serial `messages.get` per message. Fine at ~16/day; fix with the batch
+  endpoint before widening the window.
+- `docs/product-summary.md` still describes email drafting and archive/label. Kept deliberately as
+  the original spec, with a banner explaining the divergence.
 
 ---
 
-## ✅ Cutover complete — the footgun is gone (2026-08-12)
+## Resolved (do not re-investigate)
 
-Both scripts previously carried their own `SCOPES` (gmail's included `gmail.modify`) and their own
-`InstalledAppFlow` fallback, which would have overwritten the read-only token with a write-capable one
-on any refresh failure. Both now go through `ante_auth.load_credentials()`, which never opens a
-browser. **`run_gmail.sh` and `run_calendar.sh` are safe to run.** Verified: token scopes unchanged
-after running both.
-
-What changed:
-
-| Change | Where |
+| Was | Outcome |
 |---|---|
-| Auth via `ante_auth`, no browser fallback | both scripts |
-| `delete_event` removed | `gcalendar.py` |
-| `archive_email`, `label_email` removed | `gmail.py` |
-| `is_important()` → `always_surface()`, a floor not a gate | `gmail.py` |
-| `get_email_body()` recursive MIME walk + HTML fallback | `gmail.py` |
-| `mode='calendar'` vs `'rolling'` window | `gcalendar.py` |
-| Descriptions capped at 500 chars | `gcalendar.py` |
-| Cross-calendar duplicate events collapsed | `gcalendar.py` |
-| Both scripts return a `report` alongside data | both |
-| Skills symlinked from repo → workspace | `skills/` |
+| OAuth dead 4 months (`invalid_grant`) | Consent screen was in Testing mode (7-day refresh expiry). Now Production. |
+| Browser-consent fallback could re-grant write scopes | Removed; all auth via `ante_auth`, which never opens a browser |
+| Scope lists duplicated across scripts | Centralised in `ante_auth.SERVICE_SCOPES` |
+| `delete_event` / `archive_email` / `label_email` | Removed |
+| Keyword filter dropped 92% of mail | Inverted to an always-surface floor |
+| `get_email_body()` returned `''` | Recursive MIME walk + HTML fallback; 0/40 empty |
+| Timezone hardcoded to Detroit, calendars are Pacific | Resolved at runtime from the primary calendar, 1h TTL cache |
+| Symlinked skills loaded nothing | Copies via `sync_skills.sh` |
+| Workspace docs advertised removed capabilities | `BOOTSTRAP`/`TOOLS`/`USER`/`AGENTS` corrected 2026-08-13 |
+| Discord channel stopped, bot offline | Gateway restart; now `running, connected` |
+| "Anthropic credential dead" (HTTP 401) | Red herring — the *usage/billing* endpoint needs an admin key. Inference was fine. |
+| Ante refused to act in `#general` | Correct behaviour; allowlist was empty. Owner's sender id now allowlisted. |
+| `openclaw.json` trailing comma | Now strict JSON |
+| Workspace brain files had no backup | `scripts/backup_workspace.sh` → `workspace/` (gitignored) |
+| `/new` can't be scripted | It's a chat-surface intercept. `reset_session.py` reproduces it on disk. |
 
-**The `report` object is the important structural change.** Every pillar now returns provenance
-(`calendars_queried`, `scanned`, `failures`, `truncated`) next to its data, because an empty result
-was previously ambiguous between "nothing to report" and "silently broken" — the single most
-recurring failure shape in this project. The scripts also exit non-zero on partial failure.
+Full root-cause history for all of these is in `DEVLOG.md` (private, gitignored) — 31 entries.
 
 ---
 
 ## Next steps
 
-1. **Briefing assembler** — one message combining all three pillars. Each pillar returns
-   `(data, report)`; the assembler must surface `failures` rather than rendering a broken pillar as
-   "nothing today", which is the whole point of the report objects.
-2. **Restart the gateway**, confirm Discord actually connects (see below), fire one briefing by hand
-3. Later: university forwarding setup; news fetch; cron scheduling
-
----
-
-## Known problems not yet fixed
-
-- 🔴 **The Discord channel is stopped, and the bot is offline.** Confirmed via
-  `openclaw channels status`: `enabled, configured, stopped, disconnected, error: channel stop timed
-  out after 5000ms` — residue from the failed Aug 5 reconnect. The gateway *process* is alive and
-  port 18789 listens, which is why it looked healthy.
-  ⚠️ **`openclaw health` is not sufficient to check this.** It reports `Discord: ok` because it can
-  reach Discord's REST API; presence needs the gateway websocket, which is down. Use
-  `openclaw channels status` — it's the only one that reports the channel's real state.
-  Fix: `launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway`. Not `openclaw gateway`, which
-  refuses while the LaunchAgent owns the process.
-- 🔴 **The Anthropic credential is dead** — `Claude: HTTP 401: Invalid bearer token`. The configured
-  model is `anthropic/claude-haiku-4-5-20251001`, so **Ante cannot answer anything** until this is
-  re-authorized, even once Discord reconnects. Fix with `openclaw configure`. The `openai-codex`
-  profile is healthy, so it's specifically Anthropic that expired.
-- **The running gateway predates today's skill rewrite** (up since Aug 1). If it caches skills at
-  startup it's still using the old ones referencing `delete_event`/`archive_email`. The restart is
-  what loads the new skills.
-- **`~/.openclaw/openclaw.json` has a trailing comma** on line 9 — invalid strict JSON. OpenClaw
-  parses it leniently; any tool that doesn't will hard-fail on the whole config.
-- ⚠️ **The timezone was hardcoded to `America/Detroit` while every calendar on the account is
-  `America/Los_Angeles`.** Every event Ante created would have landed **3 hours off**, with a
-  confirmation that read as correct. Now resolved at runtime from the primary calendar
-  (`ante_auth.local_timezone()`), falling back to the system timezone. Verified: asking for 15:00 now
-  stores 15:00−08:00 and displays as 15:00. Cached with a 1-hour TTL so a long-running OpenClaw
-  process can't pin a stale zone after a relocation; DST needs no refresh since a `ZoneInfo` is a
-  zone, not an offset.
-- **For the assembler:** calendars can each carry their own timezone (`Family` is UTC here), and
-  `get_events()` returns each event's raw offset. The assembler must render everything in
-  `ante_auth.local_timezone()` rather than printing raw strings, or a UTC-calendar event will be
-  displayed hours off.
-- **Google Tasks due dates are date-only.** The API accepts RFC3339 but silently discards the time,
-  so a task cannot be due at 3pm. `add_task()` takes `YYYY-MM-DD` and rejects anything else; the
-  skill file tells the agent not to claim it set a time. Timed reminders are calendar events.
-- **No Gmail batching.** `get_recent_emails()` still does one serial `messages.get` per message.
-  Fine at current volume (16 messages ≈ 2s), but it scales linearly and the batch endpoint is the
-  fix if a wider window is ever used.
-- **Image-only email produces no text at all** — `get_email_body()` returns `source: 'none'`. Needs
-  the vision path.
-- **Calendar event descriptions are untrusted input.** Anyone who can send an invite controls text
-  that reaches the model. Capped at 500 chars and the skill file says not to follow instructions in
-  them, but that's a prompt-level mitigation, not a hard boundary.
-- `docs/product-summary.md` still describes email drafting and archive/label. Kept deliberately as
-  the original spec, with a banner explaining the divergence; README is corrected.
-
-**Workspace brain files are now backed up.** `~/.openclaw/workspace/*.md` — `SOUL.md`, `AGENTS.md`,
-`BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md` — held Ante's personality and
-user context and existed in **exactly one place**, deleted by `openclaw reset`. Unlike the scripts
-they can't be re-derived from anything. `scripts/backup_workspace.sh` snapshots them to `workspace/`
-(gitignored — they can carry personal detail and this repo is public). Re-run it whenever they
-change; the manifest stamps its own date so a stale snapshot is visible. Survives a reset, **not** a
-lost disk.
-
-**Workspace instruction files corrected (2026-08-13).** `BOOTSTRAP.md`, `TOOLS.md`, `USER.md` and
-`AGENTS.md` still described archiving email, confirming deletions, `skills/*.md` paths, and a
-hardcoded Detroit timezone — none of which are true. `TOOLS.md` in particular was a *second source of
-truth* for commands and told the agent to run `source venv/bin/activate && python3 …`, which exec
-preflight rejects; it now defers to the skill files. `SOUL.md` was left alone (personality, no stale
-claims). Re-snapshot with `scripts/backup_workspace.sh` after any further edits.
-
-**Discord group-chat identity fixed.** OpenClaw passes sender identity in a guild channel as
-*untrusted metadata*, and `guilds: {"*": {}}` was an empty allowlist under `groupPolicy: allowlist` —
-so Ante correctly refused to act on Utsav's Google account from `#general`. The owner's Discord
-sender id is now in `channels.discord.guilds."*".users`, and `USER.md`/`AGENTS.md` teach
-identification by **sender id**, never display name. `openclaw.json` is also now strict JSON (the
-trailing comma is gone).
-
-**Session reset is automatable (2026-08-16).** `/new` cannot be scripted — it's intercepted by the
-chat surface, so `--message "/new"` arrives as plain text at every programmatic layer. OpenClaw's
-scheduler is also closed: `cron.*` needs `operator.write` and this CLI is paired `operator.read` only.
-`scripts/reset_session.py` reproduces what `/new` does on disk (archive transcript, drop store entry)
-with no Gateway involved, and `scripts/install_reset_schedule.sh` schedules it via launchd — which
-follows system local time, so unlike an OpenClaw cron job it survives a move between timezones.
-⚠️ It writes OpenClaw's private state; re-verify after any version upgrade.
-
-**Not yet installed** — run `./scripts/install_reset_schedule.sh [HOUR]` to enable it.
-
-**Fixed since last update:** the browser-consent footgun, scope duplication, `delete_event`,
-`archive_email`/`label_email`, the keyword gate, `get_email_body()`, skill divergence, the
-rolling-vs-calendar window, and the 0-byte skill placeholders.
+1. **Use it for a few days.** Four things are unbuilt; observation beats guessing at which you want.
+2. **Install the nightly reset** — `./scripts/install_reset_schedule.sh 4`
+3. **Briefing assembler** — combine the three pillars; surface `report.failures` rather than
+   rendering a broken pillar as "nothing today"
+4. **Approve the CLI scope**, if you want OpenClaw-native cron
+5. Later: news fetch, university forwarding, the upgrade
