@@ -190,7 +190,6 @@ Trimming unused bundled skills is the next real lever.
   `pairing required` — a scope error wearing a pairing message. Approve the upgrade in the Control UI
   (`http://127.0.0.1:18789/`); the pending request expires quickly, so open the UI *before*
   triggering it. This blocks OpenClaw-native scheduling.
-- **Session reset is built but not installed** — `./scripts/install_reset_schedule.sh [HOUR]`.
 - **OpenClaw is 3 months behind.** Upgrade separately from other changes, and expect the LaunchAgent
   to need reinstalling (the plist hardcodes version and node paths). ⚠️ `reset_session.py` writes
   OpenClaw's private state — re-verify it after any upgrade.
@@ -249,7 +248,9 @@ Full root-cause history for all of these is in `DEVLOG.md` (private, gitignored)
 ## Next steps
 
 1. **Use it for a few days.** Four things are unbuilt; observation beats guessing at which you want.
-2. **Install the nightly reset** — `./scripts/install_reset_schedule.sh 4`
+2. **Confirm the nightly reset fired** — installed 2026-08-17 at 04:00 local. Check
+   `~/.openclaw/logs/session-reset.log` after the first night; a `skip … already fresh` line is a
+   pass, not a failure.
 3. **Briefing assembler** — combine the three pillars; surface `report.failures` rather than
    rendering a broken pillar as "nothing today"
 4. **Approve the CLI scope**, if you want OpenClaw-native cron
