@@ -86,6 +86,25 @@ The two code-level ones are exactly what the cutover has to deliver.
 University mail is **not currently reaching** the personal account. Forwarding is not restricted by
 the university; the objection was inbox mess and storage.
 
+**Direct OAuth against the umich account is closed — do not re-investigate.** U-M's Workspace blocks
+unverified third-party apps, so the auth flow cannot complete for `utsava@umich.edu`. Clearing that
+block is not realistic: `gmail.readonly` is a Google *restricted* scope, and verification for
+restricted scopes requires an annual third-party security assessment (CASA) priced for companies
+shipping products. Asking U-M ITS to allowlist the client ID is the only legitimate route and is not
+worth blocking on.
+
+Fallbacks also closed: Gmail **delegation** is a web-UI feature — the API's `userId='me'` only ever
+means the authenticated user, and the admin-level version (domain-wide delegation via a service
+account) requires being U-M's Workspace super admin. **IMAP with an app password** would bypass OAuth
+entirely, but an app password is an unscoped full-mailbox credential — read, modify *and* delete,
+with no read-only equivalent. That discards the containment property the Gmail design rests on;
+forwarding is preferable.
+
+**The consistent principle:** anything Ante reads arrives in the personal account first, by a route
+Utsav controls — Calendar via sharing, mail via forwarding. One token, one policy surface, and the
+umich OAuth policy is never in the path. Forwarding is not a workaround for the restriction; it is
+the mail equivalent of the calendar share that already works.
+
 Plan:
 1. University side → forward to the personal account, with a filter so only LMS / grading /
    faculty / keyword mail leaves
