@@ -4,6 +4,33 @@ description: Read the user's Google Calendar and create events. Use when the use
 version: 2.0.0
 ---
 
+## Recurring events (classes, anything weekly)
+
+Never create one event per meeting. A semester of classes is ~225 singles, and
+**Ante cannot delete** — a mistake at that scale has to be cleaned up by hand in
+the Google UI. One recurring event is fixable with a single `update_event`.
+
+```
+cd ~/Ante && ./venv/bin/python -c "
+import sys; sys.path.insert(0,'scripts')
+from gcalendar import create_event, weekly_rrule
+print(create_event('COURSE NAME', 'FIRST_MEETING_START', 'FIRST_MEETING_END',
+                   location='ROOM',
+                   recurrence=weekly_rrule(['MO','WE','FR'], 'LAST_DAY_OF_TERM')))
+"
+```
+
+- Day codes are iCalendar two-letter: `MO TU WE TH FR SA SU`. **Tuesday is `TU`
+  and Thursday is `TH`** — `TR` is rejected.
+- `until` is `YYYY-MM-DD`, the last day the class meets, inclusive.
+- `start_time` must be the **first actual meeting**, and must fall on one of the
+  BYDAY days. Google emits the DTSTART instance regardless of BYDAY, so a
+  Monday/Wednesday class started on a Sunday silently gains a Sunday meeting.
+  `create_event` raises rather than let that through.
+- Breaks and holidays are **not** handled. The rule runs straight through Thanksgiving
+  and fall break. Cancel those instances in the Google UI, or leave them.
+
+
 ## Reading events
 
 ```bash

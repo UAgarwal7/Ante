@@ -11,6 +11,7 @@ without changing the scope policy in ante_auth.py at the same time.
 """
 
 import datetime
+import re
 import json
 import os
 import sys
@@ -137,8 +138,79 @@ def get_events(days=1, mode='calendar'):
     return deduped, report
 
 
-def create_event(title, start_time, end_time, description='', location=''):
-    """Create an event on the primary calendar. Times are ISO 8601, local tz."""
+VALID_BYDAY = ('MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU')
+
+
+def weekly_rrule(days, until):
+    """Build the RRULE for a class that meets the same days every week.
+
+    days:  ['MO','WE','FR'] or 'MO,WE,FR' -- iCalendar two-letter codes
+    until: 'YYYY-MM-DD', the last day the class meets (inclusive)
+
+    Returns a list suitable for create_event(recurrence=...).
+
+    UNTIL must be UTC when the event carries a timezone, so the local
+    end-of-day is converted rather than formatted verbatim. Getting this
+    wrong silently drops or adds a final week -- exactly the class of error
+    that put every event three hours off before.
+    """
+    if isinstance(days, str):
+        days = [d.strip() for d in days.split(',') if d.strip()]
+    days = [d.upper() for d in days]
+    bad = [d for d in days if d not in VALID_BYDAY]
+    if bad:
+        raise ValueError(
+            f'Unknown day code(s): {bad}. Use two-letter codes from '
+            f'{VALID_BYDAY} -- e.g. Tuesday is TU, Thursday is TH.')
+    if not days:
+        raise ValueError('weekly_rrule needs at least one day')
+
+    try:
+        last = datetime.date.fromisoformat(until)
+    except ValueError:
+        raise ValueError(f'until must be YYYY-MM-DD, got {until!r}')
+
+    end_local = datetime.datetime.combine(
+        last, datetime.time(23, 59, 59), tzinfo=LOCAL_TZ())
+    end_utc = end_local.astimezone(datetime.timezone.utc)
+    return [f'RRULE:FREQ=WEEKLY;BYDAY={",".join(days)};'
+            f'UNTIL={end_utc.strftime("%Y%m%dT%H%M%SZ")}']
+
+
+def _check_start_matches_rrule(start_time, recurrence):
+    """A DTSTART that is not itself on a BYDAY day produces a stray event.
+
+    Google emits the DTSTART instance regardless of BYDAY, so a Monday-Wednesday
+    class whose start_time lands on a Sunday quietly gains a Sunday meeting.
+    Catch it here rather than discovering it in the calendar grid.
+    """
+    if not recurrence:
+        return
+    byday = set()
+    for rule in recurrence:
+        m = re.search(r'BYDAY=([A-Z,]+)', rule)
+        if m:
+            byday.update(m.group(1).split(','))
+    if not byday:
+        return
+    start_code = VALID_BYDAY[datetime.datetime.fromisoformat(start_time).weekday()]
+    if start_code not in byday:
+        raise ValueError(
+            f'start_time falls on {start_code} but the rule only covers '
+            f'{sorted(byday)}. Google would add a stray {start_code} meeting. '
+            f'Move start_time to the first real meeting of the term.')
+
+
+def create_event(title, start_time, end_time, description='', location='',
+                 recurrence=None):
+    """Create an event on the primary calendar. Times are ISO 8601, local tz.
+
+    recurrence: list of RRULE strings, e.g. from weekly_rrule(). One
+    recurring event beats hundreds of singles -- Ante cannot delete, so a
+    mistake spread over 200 events has to be cleaned up by hand, while a
+    mistake in one recurring event is a single update_event call.
+    """
+    _check_start_matches_rrule(start_time, recurrence)
     service = ante_auth.get_service('calendar')
     event = {
         'summary': title,
@@ -147,12 +219,15 @@ def create_event(title, start_time, end_time, description='', location=''):
         'start': {'dateTime': start_time, 'timeZone': str(LOCAL_TZ())},
         'end': {'dateTime': end_time, 'timeZone': str(LOCAL_TZ())},
     }
+    if recurrence:
+        event['recurrence'] = list(recurrence)
     created = service.events().insert(calendarId='primary', body=event).execute()
     return created.get('htmlLink')
 
 
 def update_event(event_id, calendar_id='primary', title=None, start_time=None,
-                 end_time=None, description=None, location=None):
+                 end_time=None, description=None, location=None,
+                 recurrence=None):
     """Change an existing event. Only the fields you pass are touched.
 
     This is what "reschedule my 3pm to tomorrow" runs. It is a patch, not a
@@ -175,6 +250,8 @@ def update_event(event_id, calendar_id='primary', title=None, start_time=None,
         body['description'] = description
     if location is not None:
         body['location'] = location
+    if recurrence is not None:
+        body['recurrence'] = list(recurrence)
 
     if start_time and not end_time:
         existing = service.events().get(
