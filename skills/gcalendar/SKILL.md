@@ -44,6 +44,21 @@ Times are ISO 8601 **without an offset**, e.g. `2026-08-15T15:00:00`, and are in
 user's own timezone — which is read from their primary calendar, not hardcoded. Write the time the
 user said and don't convert it yourself. `DESCRIPTION` and `LOCATION` are optional.
 
+### Writing a useful LOCATION
+
+Google makes the location field tappable and hands it to Maps, but only if it geocodes. A bare room
+code does not. Write **room, then building, then city**:
+
+```
+'1012 FXB, Francois-Xavier Bagnoud Building, Ann Arbor, MI'
+```
+
+- **Never drop the room number.** `FXB` is a building with dozens of rooms; `1012 FXB` is where the
+  user actually has to be. If a source gives both a code and a friendly name, keep both — the code
+  for the user, the name for the geocoder.
+- Put the city on the end. Without it, campus building names resolve unpredictably.
+- If the location is genuinely unknown (`TBA`), pass `'TBA'` rather than inventing one, and say so.
+
 ## Recurring events (classes, anything weekly)
 
 Never create one event per meeting. A semester of classes is ~225 singles, and
