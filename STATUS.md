@@ -1,6 +1,6 @@
 # Ante — Status
 
-**Last updated:** 2026-08-16
+**Last updated:** 2026-09-02
 
 Current engineering state. [docs/product-summary.md](docs/product-summary.md) is the original spec
 (April 2026) and is aspirational in places — where the two disagree, this file is right.
@@ -182,13 +182,14 @@ calendar event. Low stakes, noted deliberately.
 |---|---|
 | Google auth | `run_auth_check.sh` passes; 4 scopes, all three APIs respond |
 | Calendar read | 4 calendars queried, 0 failures; real event found on the shared university calendar |
-| Calendar write | `create_event` + `update_event`; reschedule preserves duration; all-day guard fires |
+| Calendar write | `create_event` + `update_event`; reschedule preserves duration; all-day guard fires. `recurrence=` + `weekly_rrule()` build weekly rules — helpers unit-tested (UTC `UNTIL`, `TR` rejected, stray-DTSTART guard); ⚠️ **not yet exercised against the live API** |
 | Gmail read | 16–19 messages scanned per 24h, 0 failures; body extraction 40/40 (72% plain, 27% HTML fallback) |
 | Tasks read/write | add → complete → reopen → complete; overdue canary; date validation rejects `'next tuesday'` |
 | Gateway | running, RPC probe ok |
 | Discord | `running, connected, bot:@Ante` |
 | Identity | owner's sender id allowlisted; Ante acts for him in `#general`, refuses for others |
 | Skills | 3/3 `✓ ready` from `openclaw-workspace` |
+| Images over Discord | Screenshot posted in `#general` was read by the model (2026-09-02). The bridge forwards attachments, so "here's my timetable" → `create_event` needs no image code — vision is the model's job, the scripts only ever see text. |
 | End to end | *"make a task tomorrow to do my Codesignal Assessment"* → `'Do my Code Signal assessment' due=2026-08-14` |
 
 **Cost, measured.** On Haiku a full Discord exchange is **~2.7¢** (4 API calls, ~0.7¢ each). The same
