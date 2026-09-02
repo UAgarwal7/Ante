@@ -59,6 +59,14 @@ def reset(key_match, min_bytes, dry_run, store_path=STORE):
         print(f'No session key matching {key_match!r}. Present keys:')
         for k in store:
             print(f'  {k}')
+        # For the scheduled default key this is the normal idle case: the
+        # session was already reset and nobody has messaged since, so there is
+        # genuinely nothing to do. Exiting non-zero there leaves launchd
+        # permanently reporting failure, which hides a real one. An explicit
+        # --key is interactive, where a typo should still be an error.
+        if key_match == DISCORD_KEY:
+            print('nothing to reset — no active session on that key')
+            return 0
         return 1
 
     acted = False
