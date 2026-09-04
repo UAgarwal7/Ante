@@ -1,6 +1,6 @@
 # Ante — Status
 
-**Last updated:** 2026-09-02
+**Last updated:** 2026-09-04
 
 Current engineering state. [docs/product-summary.md](docs/product-summary.md) is the original spec
 (April 2026) and is aspirational in places — where the two disagree, this file is right.
@@ -187,6 +187,7 @@ calendar event. Low stakes, noted deliberately.
 | Tasks read/write | add → complete → reopen → complete; overdue canary; date validation rejects `'next tuesday'` |
 | Gateway | running, RPC probe ok |
 | Discord | `running, connected, bot:@Ante` |
+| Channel watchdog | `ai.ante.channel-watchdog` polls every 15 min and kickstarts the gateway when the channel is `stopped` **and** Discord is reachable. Discord's 10 auto-restart attempts do not refill after a network outage, so any wifi drop leaves the channel dead on a machine that is back online (observed 2026-09-04: down 00:32, still down 10:15). |
 | Identity | owner's sender id allowlisted; Ante acts for him in `#general`, refuses for others |
 | Skills | 3/3 `✓ ready` from `openclaw-workspace` |
 | Images over Discord | Screenshot posted in `#general` was read by the model (2026-09-02). The bridge forwards attachments, so "here's my timetable" → `create_event` needs no image code — vision is the model's job, the scripts only ever see text. |
