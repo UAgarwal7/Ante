@@ -28,21 +28,32 @@ Beyond the scheduled briefings, Ante is available on-demand in Discord at any ti
 | Google OAuth for all three APIs | ✅ Working and verified |
 | Calendar — read events | ✅ Working (`get_events`, calendar-day or rolling window) |
 | Calendar — create events | ✅ Working (`create_event`) |
+| Calendar — recurring events | ✅ Working (`weekly_rrule` + `recurrence=`) — a semester of classes is one event per course, not ~225 |
 | Calendar — reschedule / move events | ✅ Working (`update_event`, preserves duration) |
 | Gmail — read recent mail | ✅ Working (`get_recent_emails`) |
 | Gmail — extract message bodies | ✅ Working (`get_email_body`, plain + HTML) |
 | Tasks — read, add, complete, reopen | ✅ Working (`tasks.py`) |
 | Tasks — change due date / notes | ✅ Working (`update_task`) |
+| Images over Discord | ✅ Working — post a screenshot and Ante reads it. Needs no image code: vision is the model's job, the scripts only ever see text |
+| Session hygiene | ✅ Automated (`ai.ante.session-reset`, nightly) — stops per-message cost climbing with session age |
+| Staying online | ✅ Automated (`ai.ante.channel-watchdog`) — Discord's retry budget doesn't refill after a network drop |
 | News digest | ❌ Not started — no code yet |
 | Briefing assembler (combining the pillars into one message) | ❌ Not started |
-| Scheduled morning / evening runs | ❌ **No cron is configured.** Nothing runs automatically. |
+| Scheduled morning / evening runs | ❌ **No briefing is scheduled** — because there is no briefing yet. Operational jobs *do* run automatically via launchd, so the scheduling route is proven. |
 | Conflict detection, study blocking, prep time | ❌ Not started |
-| Image-only email (no text anywhere) | ❌ Needs a vision path |
+| Image-only email (no text anywhere) | ❌ Needs a vision path — narrower than it sounds: vision works over Discord, but `gmail.py` extracts text only and never passes attachments to the model |
 
-All three Google pillars now read and write real data when run by hand, each returning a status
-report alongside its data so an empty result can be told apart from a failed one. Timezone is read
-from the user's primary calendar rather than hardcoded. What's missing is the layer above: nothing
-combines them into a briefing, and nothing runs on a schedule.
+All three Google pillars read and write real data, each returning a status report alongside its data
+so an empty result can be told apart from a failed one. Timezone is read from the primary calendar
+rather than hardcoded.
+
+In September 2026 this stopped being a demo: a phone screenshot of a class timetable, posted to
+Discord, became six correctly-recurring calendar events with room numbers and the right term end
+date — and an EECS 388 syllabus became 33 dated tasks. Two launchd jobs keep the agent healthy
+without supervision.
+
+What's still missing is the layer the project is named for: **nothing combines the pillars into a
+briefing, and no briefing is delivered on a schedule.** Ante is a good tool you have to ask.
 
 Deliberately absent, not missing: Gmail cannot send, draft, archive or label; nothing deletes
 calendar events, tasks, or task lists. See [Permissions](#permissions).
@@ -94,8 +105,9 @@ I was spending too much time each morning context-switching between Gmail, Googl
 - [x] Google OAuth — scopes locked down and verified across all three APIs
 - [x] Phase 2 — Google Calendar: read, create, and reschedule
 - [x] Phase 3 — Gmail read path and Google Tasks read/write
+- [x] Recurring events, image input over Discord, and unsupervised uptime
 - [ ] Briefing assembler — combine the three pillars into one message
-- [ ] Phase 4 — Morning briefing cron and news digest
+- [ ] Phase 4 — Morning briefing schedule and news digest
 - [ ] Phase 5 — Evening check-in, smart triggers, study block logic
 
 ---

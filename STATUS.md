@@ -217,9 +217,15 @@ Trimming unused bundled skills is the next real lever.
 
 **Not built**
 
-- Briefing assembler, news fetch, cron scheduling, university forwarding
+- Briefing assembler, news fetch, university forwarding
 - Conflict detection, study blocking, prep time
-- Vision path for image-only email (no text in parts, blank snippet)
+- **Briefing scheduling.** Operational scheduling exists (`ai.ante.session-reset`,
+  `ai.ante.channel-watchdog`), so launchd is a proven route — but nothing schedules a *briefing*,
+  because there is no briefing to schedule yet. The assembler is the blocker, not the scheduler.
+- Vision path for image-only **email**. Note this is narrower than it used to be: vision itself works
+  — a Discord screenshot reaches the model and became six calendar events on 2026-09-02. What is
+  missing is passing image *attachments from Gmail* through, since `gmail.py` extracts text only.
+- `EXDATE` support, so recurring classes skip fall break and Thanksgiving. Deliberately deferred.
 
 **Known constraints, handled but worth remembering**
 
@@ -261,18 +267,25 @@ Trimming unused bundled skills is the next real lever.
 | `openclaw.json` trailing comma | Now strict JSON |
 | Workspace brain files had no backup | `scripts/backup_workspace.sh` → `workspace/` (gitignored) |
 | `/new` can't be scripted | It's a chat-surface intercept. `reset_session.py` reproduces it on disk. |
+| Can Ante read images? | Yes. Discord forwards attachments; phone screenshots at ~1200px arrive legible (~1.3K tokens each). No image code needed — the scripts only ever see text. |
+| Nightly reset exited 1 every night since 2026-08-19 | "No active session" is the normal idle case, not an error. launchd sat in permanent failure, which would have hidden a real one. Fixed 2026-09-04. |
+| Ante offline ~10h despite a working network | Discord's 10 auto-restart attempts do not refill after an outage. `ai.ante.channel-watchdog` now restarts the gateway when the channel is dead *and* Discord is reachable. |
 
-Full root-cause history for all of these is in `DEVLOG.md` (private, gitignored) — 31 entries.
+Full root-cause history for all of these is in `DEVLOG.md` (private, gitignored) — 32 entries.
 
 ---
 
 ## Next steps
 
-1. **Use it for a few days.** Four things are unbuilt; observation beats guessing at which you want.
-2. **Confirm the nightly reset fired** — installed 2026-08-17 at 04:00 local. Check
-   `~/.openclaw/logs/session-reset.log` after the first night; a `skip … already fresh` line is a
-   pass, not a failure.
-3. **Briefing assembler** — combine the three pillars; surface `report.failures` rather than
-   rendering a broken pillar as "nothing today"
-4. **Approve the CLI scope**, if you want OpenClaw-native cron
-5. Later: news fetch, university forwarding, the upgrade
+1. **Briefing assembler.** This is now clearly the next thing. A semester of classes and 33
+   assignments are loaded, so a morning briefing has real content to report instead of being a demo
+   — and the `(data, report)` contract every script returns is still a discipline that nothing
+   consumes. Surface `report.failures` rather than rendering a broken pillar as "nothing today".
+2. **Schedule it with launchd**, following `install_watchdog.sh`. Two jobs already run this way; it
+   needs no pairing, no heartbeat, and follows system local time across a move.
+3. **Trim the skill registry.** 55 registered, 3 used, ~10K tokens re-sent on every call. The single
+   biggest cost lever, provider-independent, free.
+4. **University forwarding** — step 1 of 3 done (address verification). Direct OAuth is closed; see
+   the decision above.
+5. Later: news fetch, `EXDATE` for breaks, the upgrade. **Do not upgrade OpenClaw casually** — the
+   last one cost a week.
