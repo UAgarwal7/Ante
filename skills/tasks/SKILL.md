@@ -4,6 +4,35 @@ description: Read and manage the user's Google Tasks. Use when the user asks wha
 version: 1.0.0
 ---
 
+## Writing (add / update / complete / reopen)
+
+**Use the wrapper. Do not build an inline `python -c` command** — exec preflight refuses chained
+interpreter invocations, and bare `python3` misses the venv. Both were hit on 2026-09-05 and cost
+~20 failed tool calls.
+
+```bash
+~/Ante/scripts/run_tasks.sh add      --title "TITLE" [--due YYYY-MM-DD] [--notes "..."]
+~/Ante/scripts/run_tasks.sh update   --id ID [--title ...] [--due YYYY-MM-DD|none] [--notes ...]
+~/Ante/scripts/run_tasks.sh complete --id ID
+~/Ante/scripts/run_tasks.sh reopen   --id ID
+```
+
+### A write only happened if you see `"wrote": true`
+
+```json
+{"wrote": true, "verified": true, "action": "add_task",
+ "task": {"id": "...", "title": "...", "due": "2026-09-07", "status": "needsAction"}}
+```
+
+`verified: true` means the task was **re-fetched from Google after writing**, so this is evidence,
+not a claim. **A read command can never print `"wrote"`.**
+
+⚠️ **Never infer a write from the absence of an error.** On 2026-09-05 the read wrapper was run by
+mistake, returned a normal task list, and the agent announced "task added" — nothing had been
+written. Say a task was created only when you have seen `"wrote": true` in the output. If you did
+not, say so plainly instead.
+
+
 ## Reading tasks
 
 ```bash

@@ -32,32 +32,31 @@ present it as complete.
 
 ## Creating events
 
+**Use the wrapper. Do not build an inline `python -c` command** — exec preflight refuses chained
+interpreter invocations, and bare `python3` misses the venv.
+
 ```bash
-cd ~/Ante && ./venv/bin/python3 -c "
-import sys; sys.path.insert(0, 'scripts')
-from gcalendar import create_event
-print(create_event('TITLE', 'START', 'END', 'DESCRIPTION', 'LOCATION'))
-"
+~/Ante/scripts/run_calendar.sh create --title "TITLE" \
+    --start 2026-09-07T13:30:00 --end 2026-09-07T15:00:00 \
+    [--location "1012 FXB, Francois-Xavier Bagnoud Building, Ann Arbor, MI"] \
+    [--description "..."] [--days MO,WE --until 2026-12-11]
 ```
 
-Times are ISO 8601 **without an offset**, e.g. `2026-08-15T15:00:00`, and are interpreted in the
-user's own timezone — which is read from their primary calendar, not hardcoded. Write the time the
-user said and don't convert it yourself. `DESCRIPTION` and `LOCATION` are optional.
+Times are ISO 8601 **without an offset** and are interpreted in the user's own timezone, read from
+their primary calendar at runtime. Write the time the user said; do not convert it yourself.
 
-### Writing a useful LOCATION
+`--days` and `--until` together make it recurring — see below. Pass both or neither.
 
-Google makes the location field tappable and hands it to Maps, but only if it geocodes. A bare room
-code does not. Write **room, then building, then city**:
+### A write only happened if you see `"wrote": true`
 
+```json
+{"wrote": true, "verified": true, "action": "create_event",
+ "event": {"id": "...", "title": "...", "start": "...", "recurrence": [...], "link": "..."}}
 ```
-'1012 FXB, Francois-Xavier Bagnoud Building, Ann Arbor, MI'
-```
 
-- **Never drop the room number.** `FXB` is a building with dozens of rooms; `1012 FXB` is where the
-  user actually has to be. If a source gives both a code and a friendly name, keep both — the code
-  for the user, the name for the geocoder.
-- Put the city on the end. Without it, campus building names resolve unpredictably.
-- If the location is genuinely unknown (`TBA`), pass `'TBA'` rather than inventing one, and say so.
+`verified: true` means the event was **re-fetched from Google after writing**. A read command can
+never print `"wrote"`. ⚠️ **Never infer a write from the absence of an error** — on 2026-09-05 a read
+was mistaken for a write and a task was reported created that did not exist.
 
 ## Recurring events (classes, anything weekly)
 
@@ -66,13 +65,10 @@ Never create one event per meeting. A semester of classes is ~225 singles, and
 the Google UI. One recurring event is fixable with a single `update_event`.
 
 ```bash
-cd ~/Ante && ./venv/bin/python3 -c "
-import sys; sys.path.insert(0,'scripts')
-from gcalendar import create_event, weekly_rrule
-print(create_event('COURSE NAME', 'FIRST_MEETING_START', 'FIRST_MEETING_END',
-                   location='ROOM',
-                   recurrence=weekly_rrule(['MO','WE','FR'], 'LAST_DAY_OF_TERM')))
-"
+~/Ante/scripts/run_calendar.sh create --title "EECS 479: Quantum Computing - Lecture" \
+    --start 2026-08-31T13:30:00 --end 2026-08-31T15:00:00 \
+    --location "1012 FXB, Francois-Xavier Bagnoud Building, Ann Arbor, MI" \
+    --days MO,WE --until 2026-12-11
 ```
 
 - Day codes are iCalendar two-letter: `MO TU WE TH FR SA SU`. **Tuesday is `TU`
@@ -89,25 +85,15 @@ print(create_event('COURSE NAME', 'FIRST_MEETING_START', 'FIRST_MEETING_END',
 ## Rescheduling or editing an event
 
 ```bash
-cd ~/Ante && ./venv/bin/python3 -c "
-import sys; sys.path.insert(0, 'scripts')
-from gcalendar import update_event
-print(update_event('EVENT_ID', calendar_id='CALENDAR_ID', start_time='2026-08-16T14:00:00'))
-"
+~/Ante/scripts/run_calendar.sh update --id EVENT_ID [--calendar-id CALENDAR_ID] \
+    [--title ...] [--start 2026-09-07T14:00:00] [--end ...] [--location ...] [--description ...]
 ```
 
-Only the fields you pass change; everything else is left alone. Accepts `title`, `start_time`,
-`end_time`, `description`, `location`.
+`--calendar-id` matters: most events are not on `primary`. Pass the `calendar_id` from the read
+output; the default is only right for events Ante created itself.
 
-- **Pass `calendar_id` from the listing.** Most events are not on `primary`, and the default is only
-  right for events Ante created. Using the wrong one fails.
-- **Passing `start_time` alone keeps the original duration**, which is what "move my 3pm to 4pm"
-  means. Only pass `end_time` when the length is genuinely changing.
-- All-day events can't be shifted by time — the call raises rather than corrupting the event. Tell
-  the user to edit those in Google Calendar.
-
-Always use this to move an event. Never create a replacement: Ante cannot delete the original, so
-that leaves a duplicate behind and loses the event's guests and their RSVPs.
+Passing `--start` without `--end` keeps the original duration, which is what a reschedule almost
+always means. Same `"wrote": true` receipt as above.
 
 ## Deleting events
 

@@ -10,6 +10,7 @@ events.delete, so "Ante never deletes calendar events" is not enforced by Google
 without changing the scope policy in ante_auth.py at the same time.
 """
 
+import argparse
 import datetime
 import re
 import json
@@ -287,11 +288,99 @@ def update_event(event_id, calendar_id='primary', title=None, start_time=None,
     }
 
 
+def _confirm(action, event_id, calendar_id='primary'):
+    """Print a write receipt that a read command cannot produce.
+
+    Re-fetches the event from Google and prints `"wrote": true`. Reads never
+    emit that key. See the matching note in tasks.py: on 2026-09-05 the agent
+    ran a read, saw no error, and announced a write that never happened.
+    """
+    service = ante_auth.get_service('calendar')
+    verified = False
+    fetched = {}
+    try:
+        got = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        fetched = {
+            'id': got['id'],
+            'title': got.get('summary', ''),
+            'start': got['start'].get('dateTime', got['start'].get('date')),
+            'end': got['end'].get('dateTime', got['end'].get('date')),
+            'location': got.get('location', ''),
+            'recurrence': got.get('recurrence', []),
+            'link': got.get('htmlLink', ''),
+        }
+        verified = True
+    except Exception as exc:                       # pragma: no cover
+        fetched = {'error': str(exc)}
+
+    print(json.dumps({'wrote': True, 'verified': verified,
+                      'action': action, 'event': fetched}, indent=2))
+    return 0 if verified else 1
+
+
+def _main():
+    argv = sys.argv[1:]
+    sub = argv[0] if argv and not argv[0].startswith('-') else None
+
+    if sub not in ('create', 'update'):
+        # Legacy positional form, unchanged: run_calendar.sh [DAYS] [MODE]
+        days = int(argv[0]) if argv else 1
+        mode = argv[1] if len(argv) > 1 else 'calendar'
+        events, report = get_events(days=days, mode=mode)
+        print(json.dumps({'report': report, 'events': events}, indent=2))
+        # Non-zero exit when a calendar failed, so a broken run is not mistaken
+        # for a free day by anything checking the exit code.
+        return 1 if report['failures'] else 0
+
+    ap = argparse.ArgumentParser(prog='gcalendar.py')
+    ap.add_argument('action', choices=['create', 'update'])
+    ap.add_argument('--title')
+    ap.add_argument('--start', help="ISO 8601 local time, e.g. 2026-09-07T13:30:00")
+    ap.add_argument('--end')
+    ap.add_argument('--location', default=None)
+    ap.add_argument('--description', default=None)
+    ap.add_argument('--days', help='recurrence BYDAY, e.g. MO,WE,FR')
+    ap.add_argument('--until', help='recurrence end, YYYY-MM-DD')
+    ap.add_argument('--id', help='event id, required for update')
+    ap.add_argument('--calendar-id', default='primary')
+    a = ap.parse_args(argv)
+
+    recurrence = None
+    if a.days or a.until:
+        if not (a.days and a.until):
+            ap.error('recurrence needs both --days and --until')
+        recurrence = weekly_rrule(a.days, a.until)
+
+    if a.action == 'create':
+        missing = [f for f in ('title', 'start', 'end') if not getattr(a, f)]
+        if missing:
+            ap.error('create needs ' + ', '.join('--' + m for m in missing))
+        link = create_event(a.title, a.start, a.end,
+                            description=a.description or '',
+                            location=a.location or '',
+                            recurrence=recurrence)
+        # create_event returns the htmlLink; recover the id to verify.
+        service = ante_auth.get_service('calendar')
+        found = service.events().list(
+            calendarId='primary', q=a.title, singleEvents=False,
+            maxResults=10).execute().get('items', [])
+        match = next((e for e in found if e.get('htmlLink') == link), None)
+        if match is None:
+            print(json.dumps({'wrote': True, 'verified': False,
+                              'action': 'create_event', 'link': link,
+                              'note': 'created, but could not re-fetch to verify'},
+                             indent=2))
+            return 1
+        return _confirm('create_event', match['id'])
+
+    if not a.id:
+        ap.error('update needs --id (get it from run_calendar.sh)')
+    update_event(a.id, calendar_id=a.calendar_id, title=a.title,
+                 start_time=a.start, end_time=a.end,
+                 description=a.description, location=a.location,
+                 recurrence=recurrence)
+    return _confirm('update_event', a.id, a.calendar_id)
+
+
 if __name__ == '__main__':
-    days = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-    mode = sys.argv[2] if len(sys.argv) > 2 else 'calendar'
-    events, report = get_events(days=days, mode=mode)
-    print(json.dumps({'report': report, 'events': events}, indent=2))
-    # Non-zero exit when a calendar failed, so a broken run is not mistaken for
-    # a free day by anything checking the exit code.
-    sys.exit(1 if report['failures'] else 0)
+    sys.exit(_main())

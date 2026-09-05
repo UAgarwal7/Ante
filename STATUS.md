@@ -1,6 +1,6 @@
 # Ante — Status
 
-**Last updated:** 2026-09-04
+**Last updated:** 2026-09-05
 
 Current engineering state. [docs/product-summary.md](docs/product-summary.md) is the original spec
 (April 2026) and is aspirational in places — where the two disagree, this file is right.
@@ -271,7 +271,7 @@ Trimming unused bundled skills is the next real lever.
 | Nightly reset exited 1 every night since 2026-08-19 | "No active session" is the normal idle case, not an error. launchd sat in permanent failure, which would have hidden a real one. Fixed 2026-09-04. |
 | Ante offline ~10h despite a working network | Discord's 10 auto-restart attempts do not refill after an outage. `ai.ante.channel-watchdog` now restarts the gateway when the channel is dead *and* Discord is reachable. |
 
-Full root-cause history for all of these is in `DEVLOG.md` (private, gitignored) — 34 entries.
+Full root-cause history for all of these is in `DEVLOG.md` (private, gitignored) — 35 entries.
 
 ---
 

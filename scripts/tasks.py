@@ -16,6 +16,7 @@ pass YYYY-MM-DD and should not imply a time to the user.
 """
 
 import datetime
+import argparse
 import json
 import os
 import sys
@@ -201,8 +202,79 @@ def reopen_task(task_id, tasklist=DEFAULT_LIST):
     }
 
 
+def _confirm(action, result, tasklist=DEFAULT_LIST):
+    """Print a write receipt that a read command cannot produce.
+
+    Every write re-fetches the object from Google and prints `"wrote": true`
+    alongside it. Reads never emit that key. This exists because on 2026-09-05
+    the agent ran the *read* wrapper, saw no error, announced "task added", and
+    nothing had been written -- absence of an error is not evidence of a write.
+    Now there is a positive signal, and it is one only a real write produces.
+    """
+    service = ante_auth.get_service('tasks')
+    verified = False
+    fetched = {}
+    try:
+        got = service.tasks().get(tasklist=tasklist, task=result['id']).execute()
+        fetched = {
+            'id': got['id'],
+            'title': got.get('title', ''),
+            'due': (got.get('due') or '')[:10],
+            'status': got.get('status', ''),
+            'notes': got.get('notes', ''),
+        }
+        verified = True
+    except Exception as exc:                       # pragma: no cover
+        fetched = {'error': str(exc)}
+
+    print(json.dumps({'wrote': True, 'verified': verified,
+                      'action': action, 'task': fetched}, indent=2))
+    return 0 if verified else 1
+
+
+def _main():
+    argv = sys.argv[1:]
+    sub = argv[0] if argv and not argv[0].startswith('-') else 'list'
+
+    if sub == 'list':
+        tasks, report = get_tasks(include_completed='--all' in argv)
+        print(json.dumps({'report': report, 'tasks': tasks}, indent=2))
+        return 1 if report['failures'] else 0
+
+    ap = argparse.ArgumentParser(prog='tasks.py', description=__doc__)
+    ap.add_argument('action', choices=['add', 'update', 'complete', 'reopen'])
+    ap.add_argument('--title')
+    ap.add_argument('--due', help='YYYY-MM-DD, or the literal word "none" to clear it')
+    ap.add_argument('--notes')
+    ap.add_argument('--id', help='task id, required for update/complete/reopen')
+    a = ap.parse_args(argv)
+
+    if a.action == 'add':
+        if not a.title:
+            ap.error('add needs --title')
+        res = add_task(a.title, due=a.due, notes=a.notes or '')
+        return _confirm('add_task', res)
+
+    if not a.id:
+        ap.error(f'{a.action} needs --id (get it from `run_tasks.sh`)')
+
+    if a.action == 'update':
+        kw = {}
+        if a.title is not None:
+            kw['title'] = a.title
+        if a.notes is not None:
+            kw['notes'] = a.notes
+        if a.due is not None:
+            kw['due'] = None if a.due.lower() == 'none' else a.due
+        if not kw:
+            ap.error('update needs at least one of --title/--due/--notes')
+        return _confirm('update_task', update_task(a.id, **kw))
+
+    if a.action == 'complete':
+        return _confirm('complete_task', complete_task(a.id))
+
+    return _confirm('reopen_task', reopen_task(a.id))
+
+
 if __name__ == '__main__':
-    include_completed = '--all' in sys.argv[1:]
-    tasks, report = get_tasks(include_completed=include_completed)
-    print(json.dumps({'report': report, 'tasks': tasks}, indent=2))
-    sys.exit(1 if report['failures'] else 0)
+    sys.exit(_main())
