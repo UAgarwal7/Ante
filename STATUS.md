@@ -1,6 +1,6 @@
 # Ante — Status
 
-**Last updated:** 2026-09-05
+**Last updated:** 2026-09-07
 
 Current engineering state. [docs/product-summary.md](docs/product-summary.md) is the original spec
 (April 2026) and is aspirational in places — where the two disagree, this file is right.
@@ -33,7 +33,7 @@ What's missing is the *scheduled* half: nothing assembles a briefing, and nothin
 | Model | Claude Haiku 4.5 (`anthropic/claude-haiku-4-5-20251001`) |
 | Delivery | Discord, `#general` guild channel. Owner's sender id is allowlisted in `channels.discord.guilds."*".users`. |
 | Gateway | launchd `ai.openclaw.gateway`, loopback port 18789, Control UI at `http://127.0.0.1:18789/` |
-| OpenClaw version | `2026.4.12` — **`2026.7.1-2` is available** |
+| OpenClaw version | `2026.4.12` — **`2026.9.2` is available** (5 months behind as of 2026-09-07) |
 | Google account | Personal Gmail — **not** the university account |
 
 ---
@@ -173,6 +173,71 @@ Tradeoff accepted: Ante then reads every email including attacker-controlled one
 so nothing can be sent, but Calendar has write access — a malicious email could in principle induce a
 calendar event. Low stakes, noted deliberately.
 
+### Study-block scheduling — code computes the windows, the model picks one
+
+Decided 2026-09-07, building option (b) over (a) ("model picks the slot from the calendar in
+context"). Slot search lives in `gcalendar.free_windows()`; the model only chooses among candidates
+and calls the existing `create_event`. No new write path, no delete path.
+
+The framing is not "flexible vs predictable" — (b) is (a) *minus the interval arithmetic*. The model
+still applies soft judgment ("not right after my 8am"); it loses only the chance to propose a slot
+that overlaps something. Four reasons, all specific to this repo:
+
+1. **`report.failures` becomes enforceable.** Under (a) "don't report a free day when a calendar
+   failed" stays a request in a prompt. `free_windows` returns zero slots and a `refused` key
+   instead — the same prompt-mitigation → code-boundary move as the guardrail table above.
+2. **All-day events are `date`, not `dateTime`.** Time math has to branch on that, and an LLM gets
+   it wrong rarely, plausibly and silently — the worst failure rate.
+3. **Calendars carry their own timezones** (`Family` is UTC). Normalising through
+   `local_timezone()` before any comparison belongs in a tested function, not in context.
+4. **Cost.** (a) needs a week of events in context per request, against the per-call context that
+   already dominates spend.
+
+Policy calls, all deliberate: all-day events do **not** block (33 assignments are loaded as all-day
+rows; blocking on them would erase the semester) but are returned in `report.all_day_notes`;
+declined invites and `transparency: transparent` events do not block; 90-minute blocks, 08:00–22:00,
+15 minutes' buffer either side of an existing event; at most 3 candidates per gap, spread across it
+rather than clustered, so three options are three different times of day.
+
+Study blocks are **proposed and confirmed** before writing, overriding the skill's usual
+"create immediately". Ante cannot delete, so a block written into the wrong slot is a manual cleanup
+in the Google UI.
+
+### Model stays Anthropic Haiku 4.5 — the OpenAI swap loses on cost
+
+Evaluated 2026-09-07 and **decided against**. The motivation was cost (plus unused OpenAI credit).
+`openai/*` is fully present in the catalog — 42 models up to `gpt-5.4-pro`, all `text+image` — so
+this was a live option, not a capability gap. It still loses.
+
+**Like-for-like, OpenAI is only ~25% cheaper.** `gpt-5.4-mini` is $0.75/$4.50 per MTok against Haiku
+4.5's $1.00/$5.00 (cached input $0.075 vs $0.10). Spend here is ~97% input, so that maps to roughly
+**2.7¢ → 2.0¢ per exchange** — real, but not a category difference.
+
+**Reasoning tokens erase it.** Every GPT-5.x model is a reasoning model; Haiku as we run it is not.
+Reasoning tokens bill at the *output* rate, and the 0.7¢/exchange saving is wiped out by only
+**~1,550 reasoning tokens per exchange** (~390 per call across our 4 calls) — a low bar for a
+tool-calling turn. The realistic outcome is a net cost *increase*.
+
+⚠️ **And effort is not configurable on 2026.4.12.** The openai-completions transport calls
+`resolveOpenAICompletionsReasoningEffort(options)` unconditionally; it returns `"high"` when unset
+and sends `reasoning_effort: "high"`. Nothing in the config schema overrides it — `reasoningDefault`
+is `on|off|stream`, which is reasoning *visibility*, not effort. (The Responses transport only emits
+the reasoning block when an option is set, in which case OpenAI's own default of `medium` applies.
+Either way reasoning tokens are billed and there is no reachable path to `effort: "none"`.) Recheck
+this if we ever do the upgrade — it is a version-specific finding, not a permanent one.
+
+**The cheap tier isn't a way out.** `gpt-5.4-nano` at $0.20/$1.25 genuinely is ~5× cheaper than Haiku
+on input — Anthropic has no nano tier, so this is the one place the "OpenAI is cheaper" intuition
+holds. But nano-class is where tool-calling reliability degrades, and tool-calling is essentially all
+Ante does. Not worth risking three tuned skill prompts to save ~2¢/day.
+
+**The actual cost lever is provider-independent:** the ~10K-token system prompt re-sent on every
+call, driven by 55 registered skills of which 3 are ours. Trimming the bundled skills we never call
+beats any provider swap, costs nothing, and carries no tool-calling risk. See *Next steps*.
+
+Revisit only if the goal changes from *spend less* to *consume OpenAI credit before it expires* —
+those are different goals and only the first is answered here.
+
 ---
 ---
 
@@ -191,6 +256,8 @@ calendar event. Low stakes, noted deliberately.
 | Identity | owner's sender id allowlisted; Ante acts for him in `#general`, refuses for others |
 | Skills | 3/3 `✓ ready` from `openclaw-workspace` |
 | Images over Discord | Screenshot posted in `#general` was read by the model (2026-09-02). The bridge forwards attachments, so "here's my timetable" → `create_event` needs no image code — vision is the model's job, the scripts only ever see text. |
+| Free-window search | `run_calendar.sh free` — 4/4 calendars, 0 failures, 14 gaps → 33 spread candidates over 7 days (2026-09-07). Refuses rather than proposing when any calendar fails. |
+| Interval math | `scripts/test_free_windows.py` — 18 tests, offline, no API: UTC-calendar normalisation, all-day/declined/transparent exclusion, buffer, no overnight windows, the refusal. |
 | End to end | *"make a task tomorrow to do my Codesignal Assessment"* → `'Do my Code Signal assessment' due=2026-08-14` |
 
 **Cost, measured.** On Haiku a full Discord exchange is **~2.7¢** (4 API calls, ~0.7¢ each). The same
@@ -218,7 +285,7 @@ Trimming unused bundled skills is the next real lever.
 **Not built**
 
 - Briefing assembler, news fetch, university forwarding
-- Conflict detection, study blocking, prep time
+- Conflict detection, prep time. **Study blocking is now built** (`free_windows`) — what is untested is the Discord path end to end: nobody has yet said "schedule me some study time" and had Ante propose and write one.
 - **Briefing scheduling.** Operational scheduling exists (`ai.ante.session-reset`,
   `ai.ante.channel-watchdog`), so launchd is a proven route — but nothing schedules a *briefing*,
   because there is no briefing to schedule yet. The assembler is the blocker, not the scheduler.
@@ -270,6 +337,7 @@ Trimming unused bundled skills is the next real lever.
 | Can Ante read images? | Yes. Discord forwards attachments; phone screenshots at ~1200px arrive legible (~1.3K tokens each). No image code needed — the scripts only ever see text. |
 | Nightly reset exited 1 every night since 2026-08-19 | "No active session" is the normal idle case, not an error. launchd sat in permanent failure, which would have hidden a real one. Fixed 2026-09-04. |
 | Ante offline ~10h despite a working network | Discord's 10 auto-restart attempts do not refill after an outage. `ai.ante.channel-watchdog` now restarts the gateway when the channel is dead *and* Discord is reachable. |
+| Should we swap Anthropic → OpenAI for cost? | **No.** ~25% cheaper like-for-like, erased by billed reasoning tokens at an effort level 2026.4.12 does not expose. Decided 2026-09-07; see the decision above. |
 
 Full root-cause history for all of these is in `DEVLOG.md` (private, gitignored) — 35 entries.
 

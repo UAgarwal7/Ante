@@ -120,6 +120,19 @@ def get_events(days=1, mode='calendar'):
                 'location': event.get('location', ''),
                 'description': description[:MAX_DESCRIPTION_CHARS],
                 'description_truncated': len(description) > MAX_DESCRIPTION_CHARS,
+                # An all-day event carries 'date' instead of 'dateTime'. Every
+                # caller doing time arithmetic has to branch on this, so say it
+                # once here rather than re-deriving it from the string shape.
+                'all_day': 'date' in event['start'],
+                # 'transparent' is Google's "show me as free" flag. Read-only:
+                # we never set it, but free_windows must not treat it as busy.
+                'transparency': event.get('transparency', 'opaque'),
+                # An invite you declined still appears on your calendar. It is
+                # not a commitment, so it must not block a study slot.
+                'declined': any(
+                    a.get('self') and a.get('responseStatus') == 'declined'
+                    for a in (event.get('attendees') or [])
+                ),
             })
 
     # The same event often lands on two calendars (a shared calendar plus a
@@ -137,6 +150,253 @@ def get_events(days=1, mode='calendar'):
 
     deduped.sort(key=lambda x: x['start'])
     return deduped, report
+
+
+# --- Free-window search -----------------------------------------------------
+#
+# Design note. The model does not do interval arithmetic. Code computes the
+# candidate slots deterministically and the model only picks one, for four
+# reasons that are all visible in this file:
+#
+#   1. get_events reports failures, and a failed calendar must not read as a
+#      free day. Under "let the model choose" that stays a request in a prompt;
+#      here it is a hard return of zero slots (see free_windows).
+#   2. Events arrive as either 'date' or 'dateTime', with per-calendar
+#      timezones (Family is UTC). Normalising that is exactly the arithmetic an
+#      LLM gets subtly and silently wrong.
+#   3. Slot search over a week would need the whole week in context on every
+#      request, and per-call context is already the dominant cost.
+#   4. It is a pure function, so it is testable without touching the API --
+#      same reasoning that made weekly_rrule a helper.
+#
+# The model keeps the judgment ("not right after my 8am"); it loses only the
+# opportunity to propose a slot that overlaps something.
+
+DEFAULT_BLOCK_MINUTES = 90
+DEFAULT_DAY_START = '08:00'
+DEFAULT_DAY_END = '22:00'
+# Without a buffer the arithmetic will happily propose 09:00-10:30 against a
+# class that ends at 09:00. Correct on paper, useless in practice.
+DEFAULT_BUFFER_MINUTES = 15
+# Slots start on clean :00/:30 boundaries, and we return at most a few per gap.
+# A 6-hour Saturday gap would otherwise yield a dozen near-identical options and
+# spend the token budget the whole (b) design was meant to protect.
+SLOT_ALIGN_MINUTES = 30
+# Anchors per gap, spread across it rather than clustered at its start. A
+# six-hour Saturday returning 16:00/16:30/17:00/17:30 offers four ways to say
+# "Saturday afternoon" and spends the token budget this design exists to
+# protect. Three spread anchors describe the gap; gap_minutes carries the rest.
+MAX_SLOTS_PER_GAP = 3
+
+
+def _parse_hhmm(value, label):
+    try:
+        hour, minute = value.split(':')
+        return datetime.time(int(hour), int(minute))
+    except (ValueError, AttributeError):
+        raise ValueError(f'{label} must be HH:MM, got {value!r}')
+
+
+def _to_local(stamp):
+    """Google timestamp -> aware datetime in LOCAL_TZ, or None if all-day.
+
+    Google sends dateTime with an offset, but the offset is the *calendar's*,
+    not ours -- a UTC calendar yields '...T13:00:00Z' for a 9am local event.
+    Comparing those without converting is how everything ends up hours off.
+    """
+    if stamp is None or 'T' not in stamp:
+        return None
+    moment = datetime.datetime.fromisoformat(stamp)
+    if moment.tzinfo is None:
+        # Shouldn't happen from the API, but a naive datetime compared against
+        # an aware one raises, and a crash mid-briefing is worse than a guess.
+        moment = moment.replace(tzinfo=LOCAL_TZ())
+    return moment.astimezone(LOCAL_TZ())
+
+
+def _ceil_to(moment, minutes):
+    """Round up to the next `minutes` boundary, dropping sub-minute noise."""
+    moment = moment.replace(second=0, microsecond=0)
+    remainder = moment.minute % minutes
+    if remainder:
+        moment += datetime.timedelta(minutes=minutes - remainder)
+    return moment
+
+
+def _floor_to(moment, minutes):
+    """Round down to the previous `minutes` boundary."""
+    moment = moment.replace(second=0, microsecond=0)
+    return moment - datetime.timedelta(minutes=moment.minute % minutes)
+
+
+def busy_intervals(events, buffer_minutes=DEFAULT_BUFFER_MINUTES):
+    """(intervals, all_day) from get_events output. Pure -- no API calls.
+
+    Padded by buffer_minutes on each side and merged, so overlapping and
+    back-to-back classes collapse into one blocked stretch.
+
+    All-day events are deliberately *not* busy. With a semester of assignments
+    loaded, due-date entries are all-day, and treating them as commitments
+    would blank out most of the term. They are returned separately so the
+    caller can still mention them.
+    """
+    pad = datetime.timedelta(minutes=buffer_minutes)
+    intervals, all_day = [], []
+
+    for event in events:
+        if event.get('declined') or event.get('transparency') == 'transparent':
+            continue
+        start = _to_local(event.get('start'))
+        end = _to_local(event.get('end'))
+        if start is None or end is None:
+            all_day.append({'date': (event.get('start') or '')[:10],
+                            'title': event.get('title', 'No title'),
+                            'calendar': event.get('calendar', '')})
+            continue
+        if end <= start:
+            continue
+        intervals.append((start - pad, end + pad))
+
+    intervals.sort()
+    merged = []
+    for start, end in intervals:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+
+    return [tuple(pair) for pair in merged], all_day
+
+
+def open_gaps(busy, day_start, day_end, days, first_day, earliest=None):
+    """Stretches inside the daily bounds that no busy interval covers.
+
+    Walks day by day rather than treating the range as one interval, because
+    'free' means free *within waking hours* -- 22:00 Tuesday to 08:00 Wednesday
+    is not a study window.
+    """
+    gaps = []
+    for offset in range(days):
+        day = (first_day + datetime.timedelta(days=offset)).date()
+        bound_start = datetime.datetime.combine(day, day_start, tzinfo=LOCAL_TZ())
+        bound_end = datetime.datetime.combine(day, day_end, tzinfo=LOCAL_TZ())
+        # Never propose a slot in the past. On day 0 this is usually what
+        # trims the morning away.
+        if earliest is not None and bound_start < earliest:
+            bound_start = _ceil_to(earliest, SLOT_ALIGN_MINUTES)
+        if bound_start >= bound_end:
+            continue
+
+        cursor = bound_start
+        for busy_start, busy_end in busy:
+            if busy_end <= cursor or busy_start >= bound_end:
+                continue
+            if busy_start > cursor:
+                gaps.append((cursor, min(busy_start, bound_end)))
+            cursor = max(cursor, busy_end)
+            if cursor >= bound_end:
+                break
+        if cursor < bound_end:
+            gaps.append((cursor, bound_end))
+
+    return [(start, end) for start, end in gaps if end > start]
+
+
+def slots_in_gap(gap_start, gap_end, block_minutes):
+    """Block-sized candidates aligned to the half hour, spread across a gap.
+
+    Returning gaps alone would hand placement back to the model, which is the
+    arithmetic this design exists to keep out -- so return real slots. But
+    return them spread from the earliest to the latest that fits, not walked
+    from the start, so three options mean three genuinely different times of
+    day instead of three ways to say the same one.
+    """
+    block = datetime.timedelta(minutes=block_minutes)
+    earliest = _ceil_to(gap_start, SLOT_ALIGN_MINUTES)
+    if earliest + block > gap_end:
+        return []
+
+    latest = _floor_to(gap_end - block, SLOT_ALIGN_MINUTES)
+    if latest < earliest:
+        latest = earliest
+
+    span = int((latest - earliest).total_seconds() // 60)
+    steps = span // SLOT_ALIGN_MINUTES          # distinct aligned starts - 1
+    count = min(MAX_SLOTS_PER_GAP, steps + 1)
+    if count == 1:
+        offsets = [0]
+    else:
+        # Evenly spaced across the gap, snapped back onto the alignment grid.
+        offsets = sorted({round(steps * i / (count - 1)) for i in range(count)})
+
+    return [(earliest + datetime.timedelta(minutes=offset * SLOT_ALIGN_MINUTES),
+             earliest + datetime.timedelta(minutes=offset * SLOT_ALIGN_MINUTES) + block)
+            for offset in offsets]
+
+
+def free_windows(days=7, block_minutes=DEFAULT_BLOCK_MINUTES,
+                 day_start=DEFAULT_DAY_START, day_end=DEFAULT_DAY_END,
+                 buffer_minutes=DEFAULT_BUFFER_MINUTES):
+    """Candidate study slots over the next `days`. Returns (slots, report).
+
+    Read-only. Placing the event is a separate, confirmed create_event call --
+    Ante cannot delete, so a slot written on a misread calendar has to be
+    cleaned up by hand in the Google UI.
+    """
+    start_time = _parse_hhmm(day_start, 'day_start')
+    end_time = _parse_hhmm(day_end, 'day_end')
+    if start_time >= end_time:
+        raise ValueError(f'day_start {day_start} is not before day_end {day_end}')
+    if block_minutes <= 0:
+        raise ValueError('block_minutes must be positive')
+
+    events, report = get_events(days=days, mode='calendar')
+    report.update({
+        'block_minutes': block_minutes,
+        'day_start': day_start,
+        'day_end': day_end,
+        'buffer_minutes': buffer_minutes,
+        'days_considered': days,
+        'all_day_notes': [],
+        'gaps_found': 0,
+        'slots_returned': 0,
+    })
+
+    # The hard rule. An empty slot list from a broken calendar is
+    # indistinguishable from a genuinely packed week, and the difference is a
+    # study block written over a class we could not see. Refuse in code.
+    if report['failures']:
+        report['refused'] = ('one or more calendars failed; refusing to '
+                             'propose slots against an incomplete schedule')
+        return [], report
+
+    busy, all_day = busy_intervals(events, buffer_minutes=buffer_minutes)
+    report['all_day_notes'] = all_day
+
+    now = datetime.datetime.now(LOCAL_TZ())
+    first_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    gaps = open_gaps(busy, start_time, end_time, days, first_day, earliest=now)
+    report['gaps_found'] = len(gaps)
+
+    slots = []
+    for gap_start, gap_end in gaps:
+        gap_minutes = int((gap_end - gap_start).total_seconds() // 60)
+        for slot_start, slot_end in slots_in_gap(gap_start, gap_end, block_minutes):
+            slots.append({
+                'date': slot_start.date().isoformat(),
+                'weekday': slot_start.strftime('%A'),
+                # No offset: this is the exact string create_event wants, so
+                # the model copies it across rather than reformatting it.
+                'start': slot_start.strftime('%Y-%m-%dT%H:%M:%S'),
+                'end': slot_end.strftime('%Y-%m-%dT%H:%M:%S'),
+                'label': (f"{slot_start.strftime('%a %d %b')} "
+                          f"{slot_start.strftime('%H:%M')}-{slot_end.strftime('%H:%M')}"),
+                'gap_minutes': gap_minutes,
+            })
+
+    slots.sort(key=lambda slot: slot['start'])
+    report['slots_returned'] = len(slots)
+    return slots, report
 
 
 VALID_BYDAY = ('MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU')
@@ -322,7 +582,7 @@ def _main():
     argv = sys.argv[1:]
     sub = argv[0] if argv and not argv[0].startswith('-') else None
 
-    if sub not in ('create', 'update'):
+    if sub not in ('create', 'update', 'free'):
         # Legacy positional form, unchanged: run_calendar.sh [DAYS] [MODE]
         days = int(argv[0]) if argv else 1
         mode = argv[1] if len(argv) > 1 else 'calendar'
@@ -333,7 +593,7 @@ def _main():
         return 1 if report['failures'] else 0
 
     ap = argparse.ArgumentParser(prog='gcalendar.py')
-    ap.add_argument('action', choices=['create', 'update'])
+    ap.add_argument('action', choices=['create', 'update', 'free'])
     ap.add_argument('--title')
     ap.add_argument('--start', help="ISO 8601 local time, e.g. 2026-09-07T13:30:00")
     ap.add_argument('--end')
@@ -343,7 +603,26 @@ def _main():
     ap.add_argument('--until', help='recurrence end, YYYY-MM-DD')
     ap.add_argument('--id', help='event id, required for update')
     ap.add_argument('--calendar-id', default='primary')
+    ap.add_argument('--block', type=int, default=DEFAULT_BLOCK_MINUTES,
+                    help='study block length in minutes')
+    ap.add_argument('--from', dest='day_from', default=DEFAULT_DAY_START,
+                    help='earliest hour to consider, HH:MM')
+    ap.add_argument('--to', dest='day_to', default=DEFAULT_DAY_END,
+                    help='latest hour to consider, HH:MM')
+    ap.add_argument('--buffer', type=int, default=DEFAULT_BUFFER_MINUTES,
+                    help='minutes to leave either side of an existing event')
+    ap.add_argument('--search-days', type=int, default=7,
+                    help='how many days ahead to search for free windows')
     a = ap.parse_args(argv)
+
+    if a.action == 'free':
+        slots, report = free_windows(days=a.search_days, block_minutes=a.block,
+                                     day_start=a.day_from, day_end=a.day_to,
+                                     buffer_minutes=a.buffer)
+        print(json.dumps({'report': report, 'slots': slots}, indent=2))
+        # Same contract as a read: non-zero when the schedule was incomplete,
+        # so "no slots" from a broken calendar is never mistaken for a busy week.
+        return 1 if report['failures'] else 0
 
     recurrence = None
     if a.days or a.until:

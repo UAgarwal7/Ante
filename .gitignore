@@ -14,6 +14,11 @@ client_secret*.json
 # specifics that are useful precisely because they aren't sanitized. Never push.
 DEVLOG.md
 
+# Session brief -- what I'm working on right now, written for one sitting.
+# Working notes, not a record: it goes stale as soon as the work lands, and
+# STATUS.md is the authoritative version of anything in it worth keeping.
+UPDATES.md
+
 # Python
 __pycache__/
 *.pyc
