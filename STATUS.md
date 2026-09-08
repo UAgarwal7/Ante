@@ -259,6 +259,7 @@ those are different goals and only the first is answered here.
 | Free-window search | `run_calendar.sh free` — 4/4 calendars, 0 failures, 14 gaps → 33 spread candidates over 7 days (2026-09-07). Refuses rather than proposing when any calendar fails. |
 | Interval math | `scripts/test_free_windows.py` — 18 tests, offline, no API: UTC-calendar normalisation, all-day/declined/transparent exclusion, buffer, no overnight windows, the refusal. |
 | End to end | *"make a task tomorrow to do my Codesignal Assessment"* → `'Do my Code Signal assessment' due=2026-08-14` |
+| End to end, study blocks | *"schedule me some study time"* over Discord → proposed slots, waited for a pick, wrote the confirmed one. Verified 2026-09-07. |
 
 **Cost, measured.** On Haiku a full Discord exchange is **~2.7¢** (4 API calls, ~0.7¢ each). The same
 question on Sonnet 4.6 was **9.3¢**. `openclaw configure` silently switched the model to Sonnet while
@@ -285,7 +286,7 @@ Trimming unused bundled skills is the next real lever.
 **Not built**
 
 - Briefing assembler, news fetch, university forwarding
-- Conflict detection, prep time. **Study blocking is now built** (`free_windows`) — what is untested is the Discord path end to end: nobody has yet said "schedule me some study time" and had Ante propose and write one.
+- Conflict detection, prep time. **Study blocking is done and exercised** — see *What works today*.
 - **Briefing scheduling.** Operational scheduling exists (`ai.ante.session-reset`,
   `ai.ante.channel-watchdog`), so launchd is a proven route — but nothing schedules a *briefing*,
   because there is no briefing to schedule yet. The assembler is the blocker, not the scheduler.
